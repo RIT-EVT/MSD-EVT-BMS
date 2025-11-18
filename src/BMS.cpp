@@ -1,5 +1,5 @@
 /**
- * @file bms_master.cpp
+ * @file BMS.cpp
  * @brief Interface for the Battery Management System (BMS) master control.
  *
  * This source implements the functions used for managing the BMS.
@@ -11,7 +11,7 @@
  * Date: October 2025
  */
 
-#include "bms_master.h"
+#include "BMS.hpp"
 #include <iostream>
 
 /* Initialization of the BMS master. */
