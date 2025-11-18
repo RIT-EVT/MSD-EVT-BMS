@@ -11,7 +11,7 @@
  * Date: October 2025
  */
 
-#include "BMS.hpp"
+#include <BMS.hpp>
 #include <iostream>
 
 /* Initialization of the BMS master. */
