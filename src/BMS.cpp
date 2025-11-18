@@ -44,4 +44,5 @@ void bms_master_shutdown() {
     // Safely shutdown communication interfaces
     // Perform any necessary cleanup
     std::cout << "BMS Master Shutdown." << std::endl;
-}*/
+}
+
