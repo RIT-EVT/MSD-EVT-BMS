@@ -2,26 +2,26 @@
     * @file main.cpp
  */
 
-#include <EVT/io/UART.hpp>
-#include <EVT/io/I2C.hpp>
-#include <EVT/io/SPI.hpp>
-#include <EVT/core/platform.hpp>
-#include <EVT/manager.hpp>
-#include <EVT/io/pin.hpp>
+#include "core/io/UART.hpp"
+#include "core/io/I2C.hpp"
+#include "core/io/SPI.hpp"
+#include "core/manager.hpp"
+#include "core/io/pin.hpp"
+#include "core/platform/f4xx/stm32f4xx.hpp"
 #include "dev/BQ34.hpp"
 
-namespace IO = EVT::core::IO;
+namespace IO = core::io;
 
 int main() {
     // Initializations
-    EVT::core::platform::init(); // system init
-    EVT::manager::init();        // manager init
-    
+    core::platform::init(); // system init
+    // core::dev;        // manager init
+
 
     // communication interface setup - UART, I2C, SPI
     IO::UART& uart = IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600);
-    IO::I2C& i2c = IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(100000);
-    IO::SPI& spi = IO::getSPI<IO::Pin::SPI_MOSI, IO::Pin::SPI_MISO, IO::Pin::SPI_SCK>(1000000);
+    IO::I2C& i2c = IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>();
+    // IO::SPI& spi = IO::getSPI<IO::Pin::SPI_SCK, IO::Pin::SPI_MOSI, IO::Pin::SPI_MISO>();
 
     BQ34 bq34(&i2c);
 
@@ -32,14 +32,31 @@ int main() {
     uint16_t soc = 0;         // state of charge in %
     uint16_t soh = 0;         // state of health in %
 
-    while (1) {
-        bq34.getVoltage(voltage);
-        bq34.getTemperature(temperature);
-        bq34.getCurrent(current);
-        bq34.getSOC(soc);
-        bq34.getSOH(soh);
+    while (true) {
+        // --- Read measurements ---
+        bool okV  = bq34.getVoltage(voltage);
+        bool okT  = bq34.getTemperature(temperature);
+        bool okI  = bq34.getCurrent(current);
+        bool okSOC = bq34.getSOC(soc);
+        bool okSOH = bq34.getSOH(soh);
 
-        EVT::manager::delay_ms(5000); // wait 5 seconds before next read
-        
+        // check if the bq34 is detected
+        if (!(okV && okT && okI && okSOC && okSOH)) {
+            uart.puts("BQ34 read error (one or more values invalid)\r\n");
+        } else {
+            // print values
+            uart.printf("Voltage: "
+                "[V={} mV] [T={} C] [I={} mA] [SOC={} %] [SOH={} %]\r\n",
+                voltage,
+                temperature,
+                current,
+                soc,
+                soh
+            );
+        }
+
+        // --- Wait for next read ---
+        core::time::wait(5000); // 5 seconds
+
     }
 }

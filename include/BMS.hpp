@@ -2,7 +2,6 @@
 #define BMS_H
 
 #ifdef __cplusplus
-extern "C" {
 #endif
 
 #pragma once
@@ -26,7 +25,6 @@ extern "C" {
 #include <memory>
 
 namespace msd::bms {
-
 /**
  * @brief High-level BMS master controller.
  *
@@ -82,6 +80,5 @@ public:
 private:
     bool initialized_ = false;
 };
-
-} // namespace msd::bms
-
+};
+#endif

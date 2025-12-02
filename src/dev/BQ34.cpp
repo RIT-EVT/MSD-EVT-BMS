@@ -9,8 +9,10 @@ Date: November 2025
 */
 
 #include "dev/BQ34.hpp"
+#include <iostream>
 
-BQ34::BQ34(I2C_HandleTypeDef* i2c) : i2cHandle(i2c) {}
+
+BQ34::BQ34(core::io::I2C* i2c) : i2cHandle(i2c) {}
 
 // Read a 16-bit word from the BQ34Z100-R2
 // params:
@@ -22,18 +24,27 @@ BQ34::BQ34(I2C_HandleTypeDef* i2c) : i2cHandle(i2c) {}
 bool BQ34::readWord(uint8_t command, uint16_t& value) {
     uint8_t buffer[2];
 
-    if (HAL_I2C_Mem_Read(i2cHandle, ADDRESS, command,
-                         I2C_MEMADD_SIZE_8BIT, buffer, 2, 100) != HAL_OK) {
-        return false;
-    }
+    // Uses 1-byte memory address (standard for BQ34Z100)
+    auto status = i2cHandle->readMemReg(
+        ADDRESS,         // 7-bit address
+        static_cast<uint32_t>(command),               // register/command
+        buffer,                // output buffer
+        2,                     // number of bytes to read
+        1                      // memory address length
+    );
 
-    value = (buffer[1] << 8) | buffer[0];
+    if (status != core::io::I2C::I2CStatus::OK)
+        return false;
+
+    // Convert little-endian from BQ34Z100
+    value = (uint16_t(buffer[1]) << 8) | buffer[0];
+
     return true;
 }
 
 // getters for various parameters
 
-bool BQ34::getVoltage(uint16_t& mv) { 
+bool BQ34::getVoltage(uint16_t& mv) {
     if (readWord(VOLTAGE, mv) ){
         std::cout << "Voltage: " << mv << " mV" << std::endl;
         return true;
@@ -41,7 +52,7 @@ bool BQ34::getVoltage(uint16_t& mv) {
     return false;
 }
 
-bool BQ34::getTemperature(uint16_t& t) { 
+bool BQ34::getTemperature(uint16_t& t) {
     if (readWord(TEMPERATURE, t) ){
         std::cout << "Temperature: " << (t / 10.0 - 273.15) << " °C" << std::endl;
         return true;
@@ -49,7 +60,7 @@ bool BQ34::getTemperature(uint16_t& t) {
     return false;
 }
 
-bool BQ34::getCurrent(int16_t& mA) { 
+bool BQ34::getCurrent(int16_t& mA) {
     if (readWord(CURRENT, (uint16_t&)mA) ){
         std::cout << "Current: " << mA << " mA" << std::endl;
         return true;
@@ -57,7 +68,7 @@ bool BQ34::getCurrent(int16_t& mA) {
     return false;
 }
 
-bool BQ34::getSOC(uint16_t& soc) { 
+bool BQ34::getSOC(uint16_t& soc) {
     if (readWord(SOC, soc) ){
         std::cout << "State of Charge: " << soc << " %" << std::endl;
         return true;
@@ -65,7 +76,7 @@ bool BQ34::getSOC(uint16_t& soc) {
     return false;
 }
 
-bool BQ34::getSOH(uint16_t& soh) { 
+bool BQ34::getSOH(uint16_t& soh) {
     if (readWord(MAXERROR, soh) ){
         std::cout << "State of Health: " << soh << " %" << std::endl;
         return true;
