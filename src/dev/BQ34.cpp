@@ -83,3 +83,32 @@ bool BQ34::getSOH(uint16_t& soh) {
     }
     return false;
 }
+
+bool BQ34::getFlags(uint16_t& flags) {
+    if (readWord(FLAGS, flags)) {
+        std::cout << "FLAGS: 0x" << std::hex << flags << std::dec << std::endl;
+
+        // Decode common flag bits
+        if (flags & 0x0001) std::cout << "  - DSG (Discharging detected)" << std::endl;
+        if (flags & 0x0002) std::cout << "  - SOCF (SOC threshold final)" << std::endl;
+        if (flags & 0x0004) std::cout << "  - SOC1 (SOC threshold 1)" << std::endl;
+        if (flags & 0x0008) std::cout << "  - BAT_DET (Battery detected)" << std::endl;
+        if (flags & 0x0010) std::cout << "  - WAIT_ID (Waiting for ID)" << std::endl;
+        if (flags & 0x0020) std::cout << "  - OCV_TAKEN (OCV measurement taken)" << std::endl;
+        if (flags & 0x0100) std::cout << "  - CHG (Charging detected)" << std::endl;
+        if (flags & 0x0200) std::cout << "  - FC (Fully charged)" << std::endl;
+        if (flags & 0x0400) std::cout << "  - OTD (Over temperature discharge)" << std::endl;
+        if (flags & 0x0800) std::cout << "  - OTC (Over temperature charge)" << std::endl;
+
+        return true;
+    }
+    return false;
+}
+
+bool BQ34::getVoltageRaw(uint16_t& mv) {
+    if (readWord(VOLTAGE, mv)) {
+        std::cout << "Voltage (raw): " << mv << " mV" << std::endl;
+        return true;
+    }
+    return false;
+}

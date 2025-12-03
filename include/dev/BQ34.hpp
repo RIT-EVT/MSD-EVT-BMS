@@ -31,7 +31,7 @@ Date: November 2025
 
 // other commands - see datasheet
 #define SOC                 0x02
-#define MAXERROR            0x03 // SOH error in %
+#define MAXERROR            0x03 // max error in %
 #define REMAININGCAPACITY   0x04 // in mAh
 #define FULLCHARGECAPACITY  0x06 // in mAh
 #define VOLTAGE             0x08 // in mV
@@ -52,10 +52,12 @@ public:
     bool getCurrent(int16_t& mA);
     bool getSOC(uint16_t& soc);
     bool getSOH(uint16_t& soh);
+    bool getFlags(uint16_t& flags);
+    bool getVoltageRaw(uint16_t& mv);
 
 private:
     core::io::I2C* i2cHandle;
-    static constexpr uint8_t ADDRESS = 0x55 << 1;  // in STM form
+    static constexpr uint8_t ADDRESS = 0x55;  // in STM form
 };
 
 #endif
