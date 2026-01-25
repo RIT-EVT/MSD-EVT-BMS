@@ -22,6 +22,19 @@ extern "C" {
 #include <cstring>
 #include <cstdio>
 
+// MACROS for comms pins
+#define SCLK 51
+#define MISO 52
+#define MOSI 53
+#define UART_TX 16
+#define UART_RX 17
+#define I2C_SCL 61
+#define I2C_SDA 62
+#define CAN_STB 56
+#define CAN_uCRX 57
+#define CAN_uCTX 58
+#define EEP_nWC
+
 // UART communication functions
 void comms_uart_init(uint32_t baudrate);
 int  comms_uart_send(const uint8_t *data, size_t length);

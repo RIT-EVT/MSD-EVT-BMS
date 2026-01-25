@@ -61,7 +61,8 @@ project(${BOARD_LIB_NAME}
         )
 
 add_library(${PROJECT_NAME} STATIC
-        src/dev/BQ34.cpp)
+        src/dev/BQ34.cpp
+)
 
 # Add sources
 target_sources(${PROJECT_NAME} PRIVATE
