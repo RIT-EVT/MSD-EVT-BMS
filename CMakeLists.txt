@@ -62,6 +62,8 @@ project(${BOARD_LIB_NAME}
 
 add_library(${PROJECT_NAME} STATIC
         src/dev/BQ34.cpp
+        include/Thermistor.hpp
+        src/Thermistor.cpp
 )
 
 # Add sources

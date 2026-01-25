@@ -19,12 +19,22 @@
  * Date: October 2025
  */
 
+#include "Thermistor.hpp"
+#include "core/dev/Thermistor.hpp"
+#include "core/dev/storage/M24C32.hpp"
 #include "core/manager.hpp"
+#include "dev/BQ34.hpp"
+
+#include <cmath>
 
 
 static constexpr uint32_t NORMAL_UPDATE_MS = 5000;
 static constexpr uint32_t FAST_UPDATE_MS   = 1000;
 static constexpr uint32_t SLOW_UPDATE_MS   = 10000;
+constexpr uint16_t EEPROM_THERM_BASE = 0x0100;
+constexpr uint16_t EEPROM_THERM_STRIDE = 12;
+static constexpr uint8_t NUM_THERMISTORS = 2;
+
 
 namespace msd::bms {
 
@@ -81,21 +91,11 @@ public:
      * @brief Query whether the master is initialized.
      */
     bool is_initialized() const noexcept { return initialized_; }
+
+
 private:
-    void update_measurements();
-    void update_protection();
-    void update_state_machine();
 
     bool initialized_ = false;
-
-    // variables for BQ34 readings
-    uint16_t voltage;     // in mV
-    uint16_t temperature; // convert to C: (temp / 10) - 273.15
-    int16_t current;      // in mA; positive = discharging, negative = charging
-    uint16_t soc;         // state of charge in %
-    uint16_t soh;         // state of health in %
-    uint16_t flags;
-    uint16_t voltage_raw;
 
     // BMS state
     enum class BmsState {
@@ -105,8 +105,41 @@ private:
         FAULT,
         SHUTDOWN
     };
-
     BmsState state_ = BmsState::INIT;
+
+
+    // BQ34
+    uint16_t bq34_voltage;     // in mV
+    uint16_t bq34_temperature; // convert to C: (temp / 10) - 273.15
+    int16_t bq34_current;      // in mA; positive = discharging, negative = charging
+    uint16_t bq34_soc;         // state of charge in %
+    uint16_t bq34_soh;         // state of health in %
+    uint16_t bq34_flags;       // all flags
+    uint16_t bq34_voltage_raw; // raw voltage value
+
+    static constexpr uint16_t BQ34_WARN_MASK =
+        0x0002 |  // SOCF
+        0x0004;   // SOC1
+
+    static constexpr uint16_t BQ34_FAULT_MASK =
+        0x0400 |  // OTD
+        0x0800;   // OTC
+
+    // EEPROM
+    core::io::ADC* therm_adcs_[5];
+    ThermistorArray* thermistors_;
+    struct ThermistorLogEntry {
+        uint8_t sensor_id;
+        uint32_t timestamp;
+        int16_t temperature_x10;  // 0.1°C resolution
+        uint8_t fault;
+    };
+
+    void update_measurements();
+    void update_protection();
+    void update_state_machine();
+
+
 };
 };
 #endif

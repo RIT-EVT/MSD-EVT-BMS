@@ -14,7 +14,6 @@ Date: November 2025
 
 #include <core/io/I2C.hpp>
 #include <core/io/UART.hpp>
-// #include <core/manager.hpp>
 
 // BQ34Z100-R2 commands
 #define CONTROL             0x00
@@ -44,7 +43,7 @@ Date: November 2025
 
 class BQ34 {
 public:
-    BQ34(core::io::I2C* i2c, core::io::UART* uart);
+    BQ34(core::io::I2C* i2c);
 
     bool readWord(uint8_t command, uint16_t& value);
 
@@ -58,7 +57,6 @@ public:
 
 private:
     core::io::I2C* i2cHandle;
-    core::io::UART* uartHandle;
     static constexpr uint8_t ADDRESS = 0x55;  // in STM form
 };
 
