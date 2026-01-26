@@ -71,15 +71,15 @@ bool BQ34::getSOC(uint16_t& soc) {
     return false;
 }
 
-bool BQ34::getSOH(uint16_t& soh) {
-    if (readWord(MAXERROR, soh) ){
+bool BQ34::getMaxError(uint16_t& error) {
+    if (readWord(MAXERROR, error) ){
         return true;
     }
     return false;
 }
 
 bool BQ34::getFlags(uint16_t& flags) {
-    if (readWord(FLAGS, flags)) {
+    if (readWord(FLAGSH, flags)) {
         return true;
     }
     return false;

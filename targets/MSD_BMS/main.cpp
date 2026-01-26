@@ -4,8 +4,6 @@
 
 #include "BMS.hpp"
 // #include "core/utils/time.hpp"
-// #include "core/io/UART.hpp"
-// #include "core/manager.hpp"
 
 namespace IO = core::io;
 
@@ -23,10 +21,10 @@ int main() {
     bms.update();
 
     // main loop
-    // while (true) {
-    //
-    //     // core::time::wait(NORMAL_UPDATE_MS);
-    // }
+    while (true) {
+        bms.update();
+        core::time::wait(SLOW_UPDATE_MS); // wait 10 seconds for now
+    }
     // load configuration data
     // thresholds, timing, cell count, calibration
 
