@@ -20,7 +20,7 @@
  */
 
 #include "Thermistor.hpp"
-#include "core/dev/Thermistor.hpp"
+// #include "core/dev/Thermistor.hpp"
 #include "core/dev/storage/M24C32.hpp"
 #include "core/manager.hpp"
 #include "dev/BQ34.hpp"
@@ -113,17 +113,22 @@ private:
     uint16_t bq34_temperature; // convert to C: (temp / 10) - 273.15
     int16_t bq34_current;      // in mA; positive = discharging, negative = charging
     uint16_t bq34_soc;         // state of charge in %
-    uint16_t bq34_soh;         // state of health in %
-    uint16_t bq34_flags;       // all flags
+    uint16_t bq34_max_error;         // state of health in %
+    uint16_t bq34_flags;       // flags
     uint16_t bq34_voltage_raw; // raw voltage value
 
     static constexpr uint16_t BQ34_WARN_MASK =
-        0x0002 |  // SOCF
-        0x0004;   // SOC1
+        // 0x0002 |  // SOCF
+        // 0x0004 |  // SOC1
+        // 0x0010;   // CF
+        0; // placeholder until battery connected
 
     static constexpr uint16_t BQ34_FAULT_MASK =
-        0x0400 |  // OTD
-        0x0800;   // OTC
+        0x0400 |  // XCHG
+        0x0800 |  // CHG_INH
+        0x2000 |  // BATHI
+        0x4000 |  // OTD
+        0x8000;   // OTC
 
     // EEPROM
     core::io::ADC* therm_adcs_[5];

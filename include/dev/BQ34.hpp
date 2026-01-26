@@ -38,8 +38,8 @@ Date: November 2025
 #define AVERAGECURRENT      0x0A // in mA
 #define CURRENT             0x10 // in mA
 #define TEMPERATURE         0x0C // in 0.1K
-#define FLAGS               0x0E
-#define FLAGSB              0x12
+#define FLAGSH              0x0E
+#define FLAGSL              0x0F
 
 class BQ34 {
 public:
@@ -51,7 +51,7 @@ public:
     bool getTemperature(uint16_t& t);
     bool getCurrent(int16_t& mA);
     bool getSOC(uint16_t& soc);
-    bool getSOH(uint16_t& soh);
+    bool getMaxError(uint16_t& soh);
     bool getFlags(uint16_t& flags);
     bool getVoltageRaw(uint16_t& mv);
 
