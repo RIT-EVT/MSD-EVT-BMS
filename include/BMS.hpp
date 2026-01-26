@@ -24,6 +24,7 @@
 #include "core/dev/storage/M24C32.hpp"
 #include "core/manager.hpp"
 #include "dev/BQ34.hpp"
+#include "dev/BQ79631.hpp"
 
 #include <cmath>
 

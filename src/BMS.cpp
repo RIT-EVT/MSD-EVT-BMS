@@ -23,6 +23,7 @@ IO::I2C* i2c = nullptr;
 
 BQ34* fuel_gauge = nullptr;
 core::dev::M24C32* eeprom = nullptr;
+core::dev::BQ79631* hv_monitor = nullptr;
 }
 
 msd::bms::BmsMaster& msd::bms::BmsMaster::instance() {
@@ -64,7 +65,9 @@ void msd::bms::BmsMaster::init() {
      */
     static BQ34 fuel_gage_inst{i2c};
     static core::dev::M24C32 eeprom_inst{0x50, *i2c};
+    static core::dev::BQ79631 hv_monitor_inst{*i2c};
     fuel_gauge = &fuel_gage_inst;
+    hv_monitor = &hv_monitor_inst;
     eeprom = &eeprom_inst;
 
     /**

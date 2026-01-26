@@ -13,7 +13,6 @@ Date: November 2025
 #define BQ34_HPP
 
 #include <core/io/I2C.hpp>
-#include <core/io/UART.hpp>
 
 // BQ34Z100-R2 commands
 #define CONTROL             0x00
