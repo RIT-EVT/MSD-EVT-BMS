@@ -65,10 +65,7 @@ public:
 
 private:
     // --- Conversion helpers ---
-    float adcToVoltage(uint32_t adc) const;
-    float voltageToResistance(float v) const;
-    int16_t resistanceToTemperature(float r, uint8_t index) const;
-
+    float thermistorBetaTemp(uint32_t adc,float vref, uint32_t adc_max,float r_pullup);
     Fault detectFault(uint32_t adc) const;
 
     Coefficients coeffs_[SENSOR_COUNT];

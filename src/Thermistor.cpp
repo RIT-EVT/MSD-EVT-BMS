@@ -15,24 +15,6 @@ ThermistorArray::ThermistorArray(core::io::ADC* adcs[SENSOR_COUNT]) {
     }
 }
 
-void ThermistorArray::update() {
-    for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
-        uint32_t adc = adcs_[i]->read();
-
-        Fault fault = detectFault(adc);
-        readings_[i].fault = fault;
-
-        if (fault != Fault::NONE) {
-            readings_[i].temperature_dC = 0;
-            continue;
-        }
-
-        float v = adcToVoltage(adc);
-        float r = voltageToResistance(v);
-        readings_[i].temperature_dC = resistanceToTemperature(r, i);
-    }
-}
-
 ThermistorArray::Reading ThermistorArray::getSensor(uint8_t index) const {
     if (index >= SENSOR_COUNT) {
         return {0, Fault::ADC_FAULT};
@@ -64,32 +46,46 @@ int16_t ThermistorArray::getAverage() const {
 
 // Need to check logic to get actual temperature values!!!
 
-float ThermistorArray::adcToVoltage(uint32_t adc) const {
-    return (static_cast<float>(adc) / ADC_MAX) * VREF;
-}
 
-float ThermistorArray::voltageToResistance(float v) const {
-    return PULLUP_OHMS * (v / (VREF - v));
-}
-
-int16_t ThermistorArray::resistanceToTemperature(float r, uint8_t index) const {
-    const auto& c = coeffs_[index];
-
-    float lnR = logf(r);
-    float invT = c.a + c.b * lnR + c.c * lnR * lnR * lnR;
-    float tempC = (1.0f / invT) - 273.15f;
-
-    return static_cast<int16_t>(tempC * 10.0f);
-}
-
-void ThermistorArray::loadCoefficients(core::dev::M24C32& eeprom, uint16_t base_addr) {
-    for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
-        uint16_t addr = base_addr + (i * 12);
-
-        eeprom.readBytes(addr + 0,  reinterpret_cast<uint8_t*>(&coeffs_[i].a), 4);
-        eeprom.readBytes(addr + 4,  reinterpret_cast<uint8_t*>(&coeffs_[i].b), 4);
-        eeprom.readBytes(addr + 8,  reinterpret_cast<uint8_t*>(&coeffs_[i].c), 4);
+float ThermistorArray::thermistorBetaTemp(uint32_t adc,float vref,uint32_t adc_max,float r_pullup) {
+    if (adc == 0 || adc >= adc_max) {
+        return NAN; // open or short
     }
+
+    float v = (adc * vref) / adc_max;
+    float r = r_pullup * v / (vref - v);
+
+    constexpr float B  = 5950.0f;
+    constexpr float R0 = 10000.0f;
+    constexpr float T0 = 298.15f;
+
+    float invT = (1.0f / T0) + (1.0f / B) * logf(r / R0);
+    float T = 1.0f / invT;
+
+    return T - 273.15f;
+}
+
+
+void ThermistorArray::update() {
+    for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
+        uint32_t adc = adcs_[i]->read();
+        readings_[i].fault = detectFault(adc);
+        readings_[i].temperature_dC = thermistorBetaTemp(adc, 3.3f, 4095, 10000.0f);
+    }
+    //     uint32_t adc = adcs_[i]->read();
+    //
+    //     Fault fault = detectFault(adc);
+    //     readings_[i].fault = fault;
+    //
+    //     if (fault != Fault::NONE) {
+    //         readings_[i].temperature_dC = 0;
+    //         continue;
+    //     }
+    //
+    //     float v = adcToVoltage(adc);
+    //     float r = voltageToResistance(v);
+    //     readings_[i].temperature_dC = resistanceToTemperature(r, i);
+    // }
 }
 
 // ======================
