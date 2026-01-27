@@ -104,7 +104,17 @@ void msd::bms::BmsMaster::init() {
      * DEVICE HANDSHAKE
      * BQ34, BQ34Z100,
      */
-    uart->puts("Detecting BQ34z100...\r\n");
+    uart->puts("Detecting BQ79631...\r\n");
+
+    // wake and detect bq79634
+    hv_monitor->wake();
+    core::time::wait(2);
+    uint16_t id;
+    hv_monitor->readDeviceID(id);
+    uart->printf("BQ79631 ID: 0x%04X\r\n", id);
+    // state_ = BmsState::FAULT;
+
+    uart->puts("BQ79631 detected!\r\n");
 
     // detect bq34
     if (uint16_t controlStatus = 0; !fuel_gauge->readWord(CONTROL, controlStatus)) {
@@ -152,13 +162,13 @@ void msd::bms::BmsMaster::update() {
 
 void msd::bms::BmsMaster::update_measurements() {
     // measurement updates bq34
-    if (!(fuel_gauge->getVoltage(bq34_voltage) &&
-      fuel_gauge->getTemperature(bq34_temperature) &&
-      fuel_gauge->getCurrent(bq34_current) &&
-      fuel_gauge->getSOC(bq34_soc) &&
-      fuel_gauge->getMaxError(bq34_max_error) &&
-      fuel_gauge->getVoltageRaw(bq34_voltage_raw) &&
-      fuel_gauge->getFlags(bq34_flags))) {
+    if (!(fuel_gauge->getVoltage(bq34_voltage_) &&
+      fuel_gauge->getTemperature(bq34_temperature_) &&
+      fuel_gauge->getCurrent(bq34_current_) &&
+      fuel_gauge->getSOC(bq34_soc_) &&
+      fuel_gauge->getMaxError(bq34_max_error_) &&
+      fuel_gauge->getVoltageRaw(bq34_voltage_raw_) &&
+      fuel_gauge->getFlags(bq34_flags_))) {
         uart->puts("BQ34 read error (one or more values invalid)\r\n");
       }
 
@@ -166,35 +176,52 @@ void msd::bms::BmsMaster::update_measurements() {
     uart->puts("---------------------------------------\r\n\r\n\r\n");
 
     // debug print statements
-    int16_t temp_c = bq34_temperature/10 - 273;
-    uart->printf("Voltage: %d mV%\r\n", bq34_voltage);
+    int16_t temp_c = bq34_temperature_/10 - 273;
+    uart->printf("Voltage: %d mV%\r\n", bq34_voltage_);
     uart->printf("Temperature: %d C%\r\n", temp_c);
-    uart->printf("Current: %d mA%\r\n", bq34_current);
-    uart->printf("SOC: %d mA%\r\n", bq34_soc);
-    uart->printf("Max Error: %d %%\r\n", bq34_max_error);
-    uart->printf("Voltage (raw): %d mV%\r\n", bq34_voltage_raw);
+    uart->printf("Current: %d mA%\r\n", bq34_current_);
+    uart->printf("SOC: %d mA%\r\n", bq34_soc_);
+    uart->printf("Max Error: %d %%\r\n", bq34_max_error_);
+    uart->printf("Voltage (raw): %d mV%\r\n", bq34_voltage_raw_);
 
-    uart->printf("\tFlags: 0x%X:%\r\n", bq34_flags);
+    uart->printf("\tFlags: 0x%X:%\r\n", bq34_flags_);
 
     // Decode common flag bits
-    if (bq34_flags & 0x0100) uart->printf("%\t- CHG (Charging Allowed)%\r\n");
-    if (bq34_flags & 0x0200) uart->printf("%\t- FC (Fully Charged)%\r\n");
-    if (bq34_flags & 0x0400) uart->printf("%\t- XCHG (Charging not allowed)%\r\n");
-    if (bq34_flags & 0x0800) uart->printf("%\t- CHG_INH (Unable to charge)%\r\n");
-    if (bq34_flags & 0x1000) uart->printf("%\t- BATLOW (Low Battery Voltage)%\r\n");
-    if (bq34_flags & 0x2000) uart->printf("%\t- BATHI (High Battery Voltage)%\r\n");
-    if (bq34_flags & 0x4000) uart->printf("%\t- OTD (Over Temperature Discharge)%\r\n");
-    if (bq34_flags & 0x8000) uart->printf("%\t- OTC (Over Temperature Charge)%\r\n");
+    if (bq34_flags_ & 0x0100) uart->printf("%\t- CHG (Charging Allowed)%\r\n");
+    if (bq34_flags_ & 0x0200) uart->printf("%\t- FC (Fully Charged)%\r\n");
+    if (bq34_flags_ & 0x0400) uart->printf("%\t- XCHG (Charging not allowed)%\r\n");
+    if (bq34_flags_ & 0x0800) uart->printf("%\t- CHG_INH (Unable to charge)%\r\n");
+    if (bq34_flags_ & 0x1000) uart->printf("%\t- BATLOW (Low Battery Voltage)%\r\n");
+    if (bq34_flags_ & 0x2000) uart->printf("%\t- BATHI (High Battery Voltage)%\r\n");
+    if (bq34_flags_ & 0x4000) uart->printf("%\t- OTD (Over Temperature Discharge)%\r\n");
+    if (bq34_flags_ & 0x8000) uart->printf("%\t- OTC (Over Temperature Charge)%\r\n");
 
-    if (bq34_flags & 0x0001) uart->printf("%\t- DSG (Discharging detected)%\r\n");
-    if (bq34_flags & 0x0004) uart->printf("%\t- SOC1 (SOC First Threshold)%\r\n");
-    if (bq34_flags & 0x0002) uart->printf("%\t- SOCF (SOC Final Threshold)%\r\n");
-    if (bq34_flags & 0x0010) uart->printf("%\t- CF (Update Cycle Needed)%\r\n");
-    if (bq34_flags & 0x0080) uart->printf("%\t- REST (OCV reading taken)%\r\n");
+    if (bq34_flags_ & 0x0001) uart->printf("%\t- DSG (Discharging detected)%\r\n");
+    if (bq34_flags_ & 0x0004) uart->printf("%\t- SOC1 (SOC First Threshold)%\r\n");
+    if (bq34_flags_ & 0x0002) uart->printf("%\t- SOCF (SOC Final Threshold)%\r\n");
+    if (bq34_flags_ & 0x0010) uart->printf("%\t- CF (Update Cycle Needed)%\r\n");
+    if (bq34_flags_ & 0x0080) uart->printf("%\t- REST (OCV reading taken)%\r\n");
 
 
 
     // other measurements
+
+    // measurement updates bq79631
+    if (!(hv_monitor->getPackVoltage_mV(pack_voltage_mV_) &&
+      hv_monitor->getDieTemperature_cC(die_temp_cC_) &&
+      hv_monitor->getFaultFlags(fault_flags_) &&
+      hv_monitor->getCellCount(cell_count_))) {
+        uart->puts("BQ79631 read error (one or more values invalid)\r\n");
+      }
+
+    uart->puts("         BQ79631 MEASUREMENTS         \r\n");
+    uart->puts("---------------------------------------\r\n\r\n\r\n");
+
+    uart->printf("Pack Voltage: %d mV%\r\n", pack_voltage_mV_);
+    uart->printf("Cell count: %d \r\n", cell_count_);
+    uart->printf("Die Temperature: %d C%\r\n", die_temp_cC_);
+
+    uart->printf("\tFlags: 0x%X:%\r\n", fault_flags_);
 
     // thermistors
 
@@ -224,13 +251,13 @@ void msd::bms::BmsMaster::update_protection() {
         return;
     }
 
-    if (bq34_flags & BQ34_FAULT_MASK) {
+    if (bq34_flags_ & BQ34_FAULT_MASK) {
         uart->puts("\r\nBMS FAULT condition detected!\r\n");
         state_ = BmsState::FAULT;
         return;
     }
 
-    if ((bq34_flags & BQ34_WARN_MASK)) {
+    if ((bq34_flags_ & BQ34_WARN_MASK)) {
         uart->puts("\r\nBMS WARNING condition detected!\r\n");
         state_ = BmsState::WARNING;
         return;

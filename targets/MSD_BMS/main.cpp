@@ -21,10 +21,10 @@ int main() {
     bms.update();
 
     // main loop
-    while (true) {
-        bms.update();
-        core::time::wait(SLOW_UPDATE_MS); // wait 10 seconds for now
-    }
+    // while (true) {
+    //     bms.update();
+    //     core::time::wait(SLOW_UPDATE_MS); // wait 10 seconds for now
+    // }
     // load configuration data
     // thresholds, timing, cell count, calibration
 

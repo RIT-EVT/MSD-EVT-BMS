@@ -110,13 +110,19 @@ private:
 
 
     // BQ34
-    uint16_t bq34_voltage;     // in mV
-    uint16_t bq34_temperature; // convert to C: (temp / 10) - 273.15
-    int16_t bq34_current;      // in mA; positive = discharging, negative = charging
-    uint16_t bq34_soc;         // state of charge in %
-    uint16_t bq34_max_error;         // state of health in %
-    uint16_t bq34_flags;       // flags
-    uint16_t bq34_voltage_raw; // raw voltage value
+    uint16_t bq34_voltage_;     // in mV
+    uint16_t bq34_temperature_; // convert to C: (temp / 10) - 273.15
+    int16_t  bq34_current_;      // in mA; positive = discharging, negative = charging
+    uint16_t bq34_soc_;         // state of charge in %
+    uint16_t bq34_max_error_;         // state of health in %
+    uint16_t bq34_flags_;       // flags
+    uint16_t bq34_voltage_raw_; // raw voltage value
+
+    // BQ79631
+    uint16_t pack_voltage_mV_;
+    uint16_t  die_temp_cC_;
+    uint16_t fault_flags_;
+    uint16_t cell_count_;
 
     static constexpr uint16_t BQ34_WARN_MASK =
         // 0x0002 |  // SOCF

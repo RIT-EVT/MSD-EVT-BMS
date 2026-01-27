@@ -12,7 +12,6 @@ Date: January 2026
 #ifndef MSD_EVT_BMS_BQ79631_H
 #define MSD_EVT_BMS_BQ79631_H
 
-
 #include <cstdint>
 #include "core/io/I2C.hpp"
 
@@ -20,58 +19,38 @@ namespace core::dev {
 
 class BQ79631 {
 public:
-    /**
-     * @brief Construct a BQ79631 device
-     * @param i2c Reference to initialized I2C bus
-     * @param addr I2C address of the BQ79631 (default 0x08 typical)
-     */
-    explicit BQ79631(core::io::I2C& i2c, uint8_t addr = 0x08);
+    explicit BQ79631(core::io::I2C& i2c, uint8_t addr = 0x18);
 
-    /**
-     * @brief Initialize the device
-     * @return true if device responds correctly
-     */
-    bool init();
+    /** Wake the device (send any I2C activity to wake) */
+    bool wake();
 
-    /**
-     * @brief Poll device measurements and status
-     * @return true if successful
-     */
-    bool update();
+    /** Read DEVICE_ID (should return 0x7963) */
+    bool readDeviceID(uint16_t& id);
 
-    /* ---- Measurements ---- */
+    /** Read pack voltage (mV) */
+    bool getPackVoltage_mV(uint16_t& mv);
 
-    uint16_t getPackVoltage_mV() const;
-    int16_t  getDieTemperature_cC() const;   // centi-Celsius
-    uint16_t getCellCount() const;
+    /** Read die temperature (centi-Celsius) */
+    bool getDieTemperature_cC(uint16_t& t);
 
-    /* ---- Fault / Status ---- */
+    /** Read cell count */
+    bool getCellCount(uint16_t& count);
 
-    uint16_t getFaultFlags() const;
-    bool     hasFault() const;
-
-    /* ---- Control ---- */
-
-    bool enableBalancing(uint16_t cellMask);
-    bool disableBalancing();
+    /** Read fault flags */
+    bool getFaultFlags(uint16_t& flags);
 
 private:
     core::io::I2C& i2c_;
     uint8_t addr_;
 
-    /* Cached values */
-    uint16_t pack_voltage_mV_;
-    int16_t  die_temp_cC_;
-    uint16_t fault_flags_;
-    uint16_t cell_count_;
+    /** Send raw command frame */
+    bool sendCommand(uint8_t cmd, const uint8_t* payload = nullptr, uint8_t len = 0);
 
-    /* ---- Low-level helpers ---- */
-
-    bool writeWord(uint16_t reg, uint16_t value);
-    bool readWord(uint16_t reg, uint16_t& value);
+    /** Read response frame */
+    bool readResponse(uint8_t* buffer, uint8_t len);
 };
 
 } // namespace core::dev
 
-#endif//MSD_EVT_BMS_BQ79631_H
+#endif // MSD_EVT_BMS_BQ79631_H
 

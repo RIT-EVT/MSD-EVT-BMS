@@ -9,116 +9,131 @@ Date: January 2026
 */
 
 #include "dev/BQ79631.hpp"
+#include "core/utils/time.hpp"
 
 namespace core::dev {
 
-/* ---- Register map (partial, expandable) ---- */
-namespace {
-constexpr uint16_t REG_DEVICE_ID      = 0x0000;
-constexpr uint16_t REG_FAULT_STATUS   = 0x0010;
-constexpr uint16_t REG_PACK_VOLTAGE   = 0x0020;
-constexpr uint16_t REG_DIE_TEMP       = 0x0022;
-constexpr uint16_t REG_CELL_COUNT     = 0x0024;
-constexpr uint16_t REG_BALANCE_CTRL   = 0x0030;
-
-constexpr uint16_t DEVICE_ID_EXPECTED = 0x7963;
-}
-
 BQ79631::BQ79631(core::io::I2C& i2c, uint8_t addr)
-    : i2c_(i2c),
-      addr_(addr),
-      pack_voltage_mV_(0),
-      die_temp_cC_(0),
-      fault_flags_(0),
-      cell_count_(0) {}
+    : i2c_(i2c), addr_(addr) {}
 
-bool BQ79631::init() {
-    uint16_t device_id = 0;
-    if (!readWord(REG_DEVICE_ID, device_id)) {
-        return false;
+/* ---- Wake device ---- */
+bool BQ79631::wake() {
+    uint8_t dummy = 0x00;
+    // Any write wakes the device
+    return i2c_.write(addr_, &dummy, 1) == io::I2C::I2CStatus::OK;
+}
+
+/* ---- Send raw command ---- */
+bool BQ79631::sendCommand(uint8_t cmd, const uint8_t* payload, uint8_t len) {
+    uint8_t frame[1 + len];
+    frame[0] = cmd;
+    if (payload && len > 0) {
+        for (uint8_t i = 0; i < len; i++) {
+            frame[i + 1] = payload[i];
+        }
     }
-    return (device_id == DEVICE_ID_EXPECTED);
+    return i2c_.write(addr_, frame, 1 + len) == io::I2C::I2CStatus::OK;
 }
 
-bool BQ79631::update() {
-    bool ok = true;
-
-    ok &= readWord(REG_PACK_VOLTAGE, pack_voltage_mV_);
-    ok &= readWord(REG_DIE_TEMP, reinterpret_cast<uint16_t&>(die_temp_cC_));
-    ok &= readWord(REG_FAULT_STATUS, fault_flags_);
-    ok &= readWord(REG_CELL_COUNT, cell_count_);
-
-    return ok;
+/* ---- Read response ---- */
+bool BQ79631::readResponse(uint8_t* buffer, uint8_t len) {
+    return i2c_.read(addr_, buffer, len) == io::I2C::I2CStatus::OK;
 }
 
-/* ---- Getters ---- */
+/* ---- Device commands ---- */
 
-uint16_t BQ79631::getPackVoltage_mV() const {
-    return pack_voltage_mV_;
-}
+constexpr uint8_t CRC8_POLY = 0x07;
 
-int16_t BQ79631::getDieTemperature_cC() const {
-    return die_temp_cC_;
-}
-
-uint16_t BQ79631::getCellCount() const {
-    return cell_count_;
-}
-
-uint16_t BQ79631::getFaultFlags() const {
-    return fault_flags_;
-}
-
-bool BQ79631::hasFault() const {
-    return fault_flags_ != 0;
-}
-
-/* ---- Control ---- */
-
-bool BQ79631::enableBalancing(uint16_t cellMask) {
-    return writeWord(REG_BALANCE_CTRL, cellMask);
-}
-
-bool BQ79631::disableBalancing() {
-    return writeWord(REG_BALANCE_CTRL, 0x0000);
-}
-
-/* ---- Low-level I2C ---- */
-
-bool BQ79631::writeWord(uint16_t reg, uint16_t value) {
-    uint8_t buffer[2] = {
-        static_cast<uint8_t>(value & 0xFF),
-        static_cast<uint8_t>(value >> 8)
-    };
-
-    auto status = i2c_.writeMemReg(
-        addr_,                          // 7-bit device address
-        static_cast<uint32_t>(reg),     // register address
-        *buffer,                         // data buffer
-        2,                              // write 2 bytes
-        2                               // 16-bit register address
-    );
-
-    return (status == core::io::I2C::I2CStatus::OK);
-}
-
-bool BQ79631::readWord(uint16_t reg, uint16_t& value) {
-    uint8_t buffer[2];
-
-    auto status = i2c_.readMemReg(
-        addr_,                          // 7-bit device address
-        static_cast<uint32_t>(reg),     // register address
-        buffer,                         // output buffer
-        2,                              // read 2 bytes
-        2                               // 16-bit register address
-    );
-
-    if (status != core::io::I2C::I2CStatus::OK) {
-        return false;
+uint8_t crc8(const uint8_t* data, uint8_t len) {
+    uint8_t crc = 0;
+    for (uint8_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            if (crc & 0x80)
+                crc = (crc << 1) ^ CRC8_POLY;
+            else
+                crc <<= 1;
+        }
     }
+    return crc;
+}
 
-    // Little-endian conversion (TI standard)
-    value = (uint16_t(buffer[1]) << 8) | buffer[0];
+bool BQ79631::readDeviceID(uint16_t& id) {
+    // Command frame: CMD=0x01, rest=0x00,0x00 (dummy), CRC
+    uint8_t cmd[4] = {0x01, 0x00, 0x00, 0x00};
+    cmd[3] = crc8(cmd, 3);
+
+    if (i2c_.write(addr_, cmd, 4) != io::I2C::I2CStatus::OK)
+        return false;
+
+    // Wait for device to process
+    core::time::wait(2);
+
+    // Response frame: [MSB][LSB][CRC]
+    uint8_t rx[3] = {0};
+    if (i2c_.read(addr_, rx, 3) != io::I2C::I2CStatus::OK)
+        return false;
+
+    // Validate CRC
+    if (rx[2] != crc8(rx, 2)) return false;
+
+    id = (rx[0] << 8) | rx[1];
+    return true;
+}
+
+bool BQ79631::getPackVoltage_mV(uint16_t& mv) {
+    if (!wake()) return false;
+    core::time::wait(2);
+
+    if (!sendCommand(0x04)) return false; // PACK_VOLTAGE command
+    core::time::wait(2);
+
+    uint8_t rx[2] = {0};
+    if (!readResponse(rx, 2)) return false;
+
+    mv = (rx[0] << 8) | rx[1];
+    return true;
+}
+
+bool BQ79631::getDieTemperature_cC(uint16_t& t) {
+    if (!wake()) return false;
+    core::time::wait(2);
+
+    if (!sendCommand(0x05)) return false; // DIE_TEMP command
+    core::time::wait(2);
+
+    uint8_t rx[2] = {0};
+    if (!readResponse(rx, 2)) return false;
+
+    t = (rx[0] << 8) | rx[1];
+    return true;
+}
+
+bool BQ79631::getCellCount(uint16_t& count) {
+    if (!wake()) return false;
+    core::time::wait(2);
+
+    if (!sendCommand(0x06)) return false; // CELL_COUNT command
+    core::time::wait(2);
+
+    uint8_t rx[2] = {0};
+    if (!readResponse(rx, 2)) return false;
+
+    count = (rx[0] << 8) | rx[1];
+    return true;
+}
+
+bool BQ79631::getFaultFlags(uint16_t& flags) {
+    if (!wake()) return false;
+    core::time::wait(2);
+
+    if (!sendCommand(0x10)) return false; // FAULT_FLAGS command
+    core::time::wait(2);
+
+    uint8_t rx[2] = {0};
+    if (!readResponse(rx, 2)) return false;
+
+    flags = (rx[0] << 8) | rx[1];
     return true;
 }
 
