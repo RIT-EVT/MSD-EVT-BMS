@@ -28,6 +28,7 @@ public:
     };
 
     struct Reading {
+        uint32_t adc_raw;
         int16_t temperature_dC;   // 0.1 °C resolution
         Fault   fault;
     };

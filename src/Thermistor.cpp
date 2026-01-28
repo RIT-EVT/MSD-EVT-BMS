@@ -11,13 +11,13 @@ namespace msd::bms {
 ThermistorArray::ThermistorArray(core::io::ADC* adcs[SENSOR_COUNT]) {
     for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
         adcs_[i] = adcs[i];
-        readings_[i] = {0, Fault::ADC_FAULT};
+        readings_[i] = {0, 0, Fault::ADC_FAULT};
     }
 }
 
 ThermistorArray::Reading ThermistorArray::getSensor(uint8_t index) const {
     if (index >= SENSOR_COUNT) {
-        return {0, Fault::ADC_FAULT};
+        return {0, 0, Fault::ADC_FAULT};
     }
     return readings_[index];
 }
@@ -52,10 +52,10 @@ float ThermistorArray::thermistorBetaTemp(uint32_t adc,float vref,uint32_t adc_m
         return NAN; // open or short
     }
 
-    float v = (adc * vref) / adc_max;
+    float v = (static_cast<float>(adc) * vref) / static_cast<float>(adc_max);
     float r = r_pullup * v / (vref - v);
 
-    constexpr float B  = 5950.0f;
+    constexpr float B  = 3435.0f;
     constexpr float R0 = 10000.0f;
     constexpr float T0 = 298.15f;
 
@@ -68,9 +68,9 @@ float ThermistorArray::thermistorBetaTemp(uint32_t adc,float vref,uint32_t adc_m
 
 void ThermistorArray::update() {
     for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
-        uint32_t adc = adcs_[i]->read();
-        readings_[i].fault = detectFault(adc);
-        readings_[i].temperature_dC = thermistorBetaTemp(adc, 3.3f, 4095, 10000.0f);
+        readings_[i].adc_raw = adcs_[i]->readRaw();
+        readings_[i].fault = detectFault(readings_[i].adc_raw);
+        readings_[i].temperature_dC = thermistorBetaTemp(readings_[i].adc_raw, 3.3f, 4095, 10000.0f);
     }
     //     uint32_t adc = adcs_[i]->read();
     //

@@ -3,9 +3,10 @@
  */
 
 #include "BMS.hpp"
-// #include "core/utils/time.hpp"
 
 namespace IO = core::io;
+
+static IO::GPIO& RELAY_CTRL_PIN = IO::getGPIO<core::io::Pin::PC_2>();
 
 int main() {
     /** Initializations and Configuration (POST)
@@ -19,6 +20,14 @@ int main() {
     auto& bms = msd::bms::BmsMaster::instance();
     bms.init();
     bms.update();
+    //
+    // while (true) {
+    //     RELAY_CTRL_PIN.writePin(core::io::GPIO::State::LOW); // enable relay
+    //     core::time::wait(10000);
+    //
+    //     RELAY_CTRL_PIN.writePin(core::io::GPIO::State::HIGH); // disable relay
+    //     core::time::wait(10000);
+    // }
 
     // main loop
     // while (true) {

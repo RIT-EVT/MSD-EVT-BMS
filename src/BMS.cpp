@@ -232,15 +232,16 @@ void msd::bms::BmsMaster::update_measurements() {
     for (uint8_t i = 0; i < 2; i++) {
         auto r = thermistors_->getSensor(i);
 
-        uart->printf("TH-%d: %d.%d C  Fault=%d\r\n",
+        uart->printf("Raw ADC Value: %d   TH-%d: %d.%d C   Fault=%d\r\n",
+                     r.adc_raw,
                      i,
-                     r.temperature_dC / 10,
+                     r.temperature_dC,
                      abs(r.temperature_dC % 10),
                      static_cast<uint8_t>(r.fault));
     }
 
     int16_t avg = thermistors_->getAverage();
-    uart->printf("Avg Temp: %d.%d C\r\n", avg / 10, abs(avg % 10));
+    uart->printf("Avg Temp: %d.%d C\r\n", avg, abs(avg % 10));
 }
 
 void msd::bms::BmsMaster::update_protection() {
