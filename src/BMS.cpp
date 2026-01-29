@@ -17,13 +17,21 @@
 #include "BMS.hpp"
 
 namespace IO = core::io;
+namespace DEV = core::dev;
 namespace {
 IO::UART* uart = nullptr;
 IO::I2C* i2c = nullptr;
-
 BQ34* fuel_gauge = nullptr;
-core::dev::M24C32* eeprom = nullptr;
-core::dev::BQ79631* hv_monitor = nullptr;
+DEV::M24C32* eeprom = nullptr;
+DEV::BQ79631* hv_monitor = nullptr;
+core::io::GPIO& status_gpio = core::io::getGPIO<core::io::Pin::PA_5>();
+DEV::LED status_led(status_gpio, DEV::LED::ActiveState::LOW);
+core::io::GPIO& warning_gpio = core::io::getGPIO<core::io::Pin::PA_6>();
+DEV::LED warning_led(warning_gpio, DEV::LED::ActiveState::LOW);
+core::io::GPIO& error_gpio = core::io::getGPIO<core::io::Pin::PA_7>();
+DEV::LED error_led(error_gpio, DEV::LED::ActiveState::LOW);
+core::io::GPIO& extra_gpio = core::io::getGPIO<core::io::Pin::PB_0>();
+DEV::LED extra_led(extra_gpio, DEV::LED::ActiveState::LOW);
 }
 
 msd::bms::BmsMaster& msd::bms::BmsMaster::instance() {
@@ -38,6 +46,13 @@ void msd::bms::BmsMaster::init() {
     if (initialized_) {
         return;
     }
+
+    status_led.setState(core::io::GPIO::State::HIGH);
+    warning_led.setState(core::io::GPIO::State::HIGH);
+    error_led.setState(core::io::GPIO::State::HIGH);
+    extra_led.setState(core::io::GPIO::State::HIGH);
+
+
     // Initialize communication interfaces (e.g., I2C, UART)
     // Setup safety monitoring systems
     // Initialize fault handling mechanisms
@@ -64,8 +79,8 @@ void msd::bms::BmsMaster::init() {
      * need to add success/failure verification (shouldn't fail though)
      */
     static BQ34 fuel_gage_inst{i2c};
-    static core::dev::M24C32 eeprom_inst{0x50, *i2c};
-    static core::dev::BQ79631 hv_monitor_inst{*i2c};
+    static DEV::M24C32 eeprom_inst{0x50, *i2c};
+    static DEV::BQ79631 hv_monitor_inst{*i2c};
     fuel_gauge = &fuel_gage_inst;
     hv_monitor = &hv_monitor_inst;
     eeprom = &eeprom_inst;
@@ -82,7 +97,6 @@ void msd::bms::BmsMaster::init() {
      * need to add success/failure verification (shouldn't fail though)
 
      */
-
     // Thermistors
 
     therm_adcs_[0] = &IO::getADC<IO::Pin::PA_0>();
@@ -137,6 +151,11 @@ void msd::bms::BmsMaster::init() {
     uart->puts("EEPROM passed integrity check!\r\n");
 
     initialized_ = true;
+    core::time::wait(200);
+    status_led.setState(core::io::GPIO::State::LOW);
+    warning_led.setState(core::io::GPIO::State::LOW);
+    error_led.setState(core::io::GPIO::State::LOW);
+    extra_led.setState(core::io::GPIO::State::LOW);
     uart->puts("BMS Master initialized!\r\n\r\n");
 }
 
@@ -155,9 +174,11 @@ void msd::bms::BmsMaster::update() {
     if (!initialized_) {
         return;
     }
+    status_led.setState(core::io::GPIO::State::HIGH);
     update_measurements();
     update_protection();
     update_state_machine();
+    status_led.setState(core::io::GPIO::State::LOW);
 }
 
 void msd::bms::BmsMaster::update_measurements() {
@@ -281,9 +302,11 @@ void msd::bms::BmsMaster::update_state_machine() {
             break;
         case BmsState::WARNING:
             // do something
+            warning_led.toggle();
             break;
         case BmsState::FAULT:
             // do something
+            error_led.toggle();
             break;
         case BmsState::SHUTDOWN:
             shutdown();
