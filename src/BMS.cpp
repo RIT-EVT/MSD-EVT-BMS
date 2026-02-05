@@ -24,9 +24,8 @@ namespace DEV = core::dev;
 namespace {
 IO::UART* uart = nullptr;
 IO::I2C* i2c = nullptr;
-core::io::GPIO& hv_cs_gpio = core::io::getGPIO<core::io::Pin::PA_15>();
-core::io::GPIO* spi_cs_pins[] = { &hv_cs_gpio };
 IO::SPI* spi = nullptr;
+IO::CAN* can = nullptr;
 }
 
 // Other devices
@@ -36,7 +35,7 @@ DEV::M24C32* eeprom = nullptr;
 DEV::BQ79631* hv_monitor = nullptr;
 }
 
-// LEDs & GPIO
+// LEDs
 namespace {
 core::io::GPIO& status_gpio = core::io::getGPIO<core::io::Pin::PA_5>();
 DEV::LED status_led(status_gpio, DEV::LED::ActiveState::LOW);
@@ -46,6 +45,19 @@ core::io::GPIO& error_gpio = core::io::getGPIO<core::io::Pin::PA_7>();
 DEV::LED error_led(error_gpio, DEV::LED::ActiveState::LOW);
 core::io::GPIO& extra_gpio = core::io::getGPIO<core::io::Pin::PB_0>();
 DEV::LED extra_led(extra_gpio, DEV::LED::ActiveState::LOW);
+}
+
+namespace {
+core::io::GPIO& hv_cs_gpio = core::io::getGPIO<core::io::Pin::PA_15>();
+core::io::GPIO& can_gpio = core::io::getGPIO<core::io::Pin::PB_4>();
+core::io::GPIO* spi_cs_pins[] = { &hv_cs_gpio };
+core::io::GPIO& dia_en_gpio = core::io::getGPIO<core::io::Pin::PC_0>();
+core::io::GPIO& sel1_gpio = core::io::getGPIO<core::io::Pin::PC_1>();
+core::io::GPIO& fault_gpio = core::io::getGPIO<core::io::Pin::PC_2>();
+core::io::GPIO& latch_gpio = core::io::getGPIO<core::io::Pin::PC_3>();
+core::io::GPIO& cast_fault_gpio = core::io::getGPIO<core::io::Pin::PC_4>();
+core::io::GPIO& sw_en_shared_gpio = core::io::getGPIO<core::io::Pin::PC_5>();
+
 }
 
 // helper vars
@@ -73,6 +85,18 @@ bool BQ79600_readReg(core::io::SPI& spi, uint8_t device,
     return true;
 }
 
+// LOW = On mode, HIGH = Standby mode
+// only should be toggled low if sending CAN data
+void toggle_can(bool standby) {
+    if (standby) {
+        can_gpio.writePin(IO::GPIO::State::HIGH);
+    }
+    else {
+        can_gpio.writePin(IO::GPIO::State::LOW);
+    }
+
+}
+
 /* Initialization of the BMS master. */
 void msd::bms::BmsMaster::init() {
     if (initialized_) {
@@ -88,6 +112,13 @@ void msd::bms::BmsMaster::init() {
 
     // Set initial state for GPIO PINS
     hv_cs_gpio.writePin(core::io::GPIO::State::HIGH);
+    dia_en_gpio.writePin(core::io::GPIO::State::LOW);
+    sel1_gpio.writePin(core::io::GPIO::State::LOW);
+    latch_gpio.writePin(core::io::GPIO::State::LOW);
+    sw_en_shared_gpio.writePin(IO::GPIO::State::HIGH);
+    fault_gpio.writePin(IO::GPIO::State::HIGH);
+
+
 
     core::time::wait(10);
 
@@ -100,7 +131,7 @@ void msd::bms::BmsMaster::init() {
 
     /**
      * COMMUNICATION DEVICE INITIALIZATION
-     * uart, i2c spi
+     * uart, i2c spi, can
      * need to add success/failure verification (shouldn't fail though)
     */
 
@@ -108,6 +139,7 @@ void msd::bms::BmsMaster::init() {
     i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(); // i2c init
     spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
     spi->configureSPI(SPI_SPEED_1MHZ, IO::SPI::SPIMode::SPI_MODE0, SPI_MSB_FIRST);
+    can = &IO::getCAN<IO::Pin::PB_6, IO::Pin::PB_5>();
     #ifdef BMS_DEBUG
         uart->puts("              BMS init start           \r\n");
         uart->puts("---------------------------------------\r\n\r\n");
@@ -369,6 +401,18 @@ void msd::bms::BmsMaster::update() {
     update_protection();
     update_state_machine();
     status_led.setState(core::io::GPIO::State::LOW);
+
+    // test contactor switch
+    // when fault low -> switch on, else off
+    // device draws less current when fault on, proving latch open
+    // extra_led.setState(core::io::GPIO::State::HIGH);
+    // fault_gpio.writePin(core::io::GPIO::State::LOW);
+    // core::time::wait(5000);
+    // fault_gpio.writePin(core::io::GPIO::State::HIGH);
+    // extra_led.setState(core::io::GPIO::State::LOW);
+
+
+
 }
 
 void msd::bms::BmsMaster::update_measurements() {
