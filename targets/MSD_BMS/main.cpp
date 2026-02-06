@@ -18,6 +18,8 @@ int main() {
     // initialization
     core::platform::init();
     auto& bms = msd::bms::BmsMaster::instance();
+    // safety delay
+    core::time::wait(5000);
     bms.init();
     bms.update();
     //
@@ -30,10 +32,10 @@ int main() {
     // }
 
     // main loop
-    while (true) {
-        bms.update();
-        core::time::wait(SLOW_UPDATE_MS); // wait 10 seconds for now
-    }
+    // while (true) {
+    //     bms.update();
+    //     core::time::wait(SLOW_UPDATE_MS); // wait 10 seconds for now
+    // }
     // load configuration data
     // thresholds, timing, cell count, calibration
 
