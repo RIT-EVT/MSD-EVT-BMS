@@ -135,6 +135,16 @@ void msd::bms::BmsMaster::init() {
      * need to add success/failure verification (shouldn't fail though)
     */
 
+    // test to toggle mosi and miso pins
+    // while (true) {
+    //     mosi_gpio.writePin(IO::GPIO::State::LOW);
+    //     miso_gpio.writePin(IO::GPIO::State::LOW);
+    //     core::time::wait(10);
+    //     mosi_gpio.writePin(IO::GPIO::State::HIGH);
+    //     miso_gpio.writePin(IO::GPIO::State::HIGH);
+    //     core::time::wait(10);
+    // }
+
     i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(); // i2c init
     spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
     spi->configureSPI(SPI_SPEED_1MHZ, IO::SPI::SPIMode::SPI_MODE0, SPI_MSB_FIRST);
@@ -190,11 +200,11 @@ void msd::bms::BmsMaster::init() {
     extra_led.setState(core::io::GPIO::State::LOW); // init stage passes
 
     #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("All devices initialized!\r\n");
-            uart->puts("---------------------------------------\r\n\r\n");
-            uart->puts("Checking Master Devices...\r\n\r\n");
-        }
+    if (uart_safe_mode) {
+        uart->puts("All devices initialized!\r\n");
+        uart->puts("---------------------------------------\r\n\r\n");
+        uart->puts("Checking Master Devices...\r\n\r\n");
+    }
     #endif
 
 
@@ -206,24 +216,24 @@ void msd::bms::BmsMaster::init() {
     // detect bq34
     if (uint16_t controlStatus = 0; !fuel_gauge->readWord(CONTROL, controlStatus)) {
         #ifdef BMS_DEBUG
-            if (uart_safe_mode) {
-                uart->puts("ERROR: BQ34Z100 not detected!\r\n");
-            }
+        if (uart_safe_mode) {
+            uart->puts("ERROR: BQ34Z100 not detected!\r\n");
+        }
         #endif
         state_ = BmsState::FAULT;
         return; //go to error state
     }
     #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("BQ34Z100 detected!\r\n");
-        }
+    if (uart_safe_mode) {
+        uart->puts("BQ34Z100 detected!\r\n");
+    }
     #endif
 
     // detect m24c32
     #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("Checking EEPROM integrity...\r\n");
-        }
+    if (uart_safe_mode) {
+        uart->puts("Checking EEPROM integrity...\r\n");
+    }
     #endif
     constexpr uint32_t test = 0xBEEF;
     constexpr uint16_t EEPROM_TEST_ADDR = 0x0000;
@@ -269,7 +279,7 @@ void msd::bms::BmsMaster::init() {
 
     #endif
     // ------- wakeup sequence ---------- //
-
+    // while (true){
     for (int l = 0; l < 2; l++) {
         hv_cs_gpio.writePin(IO::GPIO::State::LOW); // CS PIN LOW
         delay_us(2);// sleep for 2 us
@@ -279,6 +289,7 @@ void msd::bms::BmsMaster::init() {
         delay_us(2);// sleep for 2 us
         hv_cs_gpio.writePin(IO::GPIO::State::HIGH); // CS PIN HIGH
     }
+// }
 
 
     core::time::wait(30);
@@ -299,7 +310,6 @@ void msd::bms::BmsMaster::init() {
         #ifdef BMS_DEBUG
         uart->puts("ERROR: Auto-addressing failed\r\n");
         #endif
-        state_ = BmsState::FAULT;
         return;
     }
 
