@@ -75,6 +75,25 @@ msd::bms::BmsMaster& msd::bms::BmsMaster::instance() {
     return instance;
 }
 
+void msd::bms::BmsMaster::spiCommClear()
+{
+    uint8_t clr = 0x00;
+
+    // Assert CS
+    hv_cs_gpio.writePin(IO::GPIO::State::LOW);
+    core::time::wait(2);   // tCSS
+
+    // Send COMM CLEAR byte
+    spi->writeReg(clr, 0x0, 1);
+
+    // Deassert CS
+    core::time::wait(2);   // tCSH
+    hv_cs_gpio.writePin(IO::GPIO::State::HIGH);
+
+    // Small recovery delay
+    core::time::wait(5);
+}
+
 // LOW = On mode, HIGH = Standby mode
 // only should be toggled low if sending CAN data
 void toggle_can(bool standby) {
@@ -117,6 +136,7 @@ void msd::bms::BmsMaster::init() {
     can_gpio.writePin(IO::GPIO::State::HIGH);
     sw_en_shared_gpio.writePin(IO::GPIO::State::HIGH);
     fault_gpio.writePin(IO::GPIO::State::HIGH);
+    mosi_gpio.writePin(IO::GPIO::State::HIGH);
 
 
 
@@ -146,8 +166,6 @@ void msd::bms::BmsMaster::init() {
     // }
 
     i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(); // i2c init
-    spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
-    spi->configureSPI(SPI_SPEED_1MHZ, IO::SPI::SPIMode::SPI_MODE0, SPI_MSB_FIRST);
     can = &IO::getCAN<IO::Pin::PB_6, IO::Pin::PB_5>();
     #ifdef BMS_DEBUG
     uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600); // uart init
@@ -169,12 +187,8 @@ void msd::bms::BmsMaster::init() {
      */
     static BQ34 fuel_gage_inst{i2c};
     static DEV::M24C32 eeprom_inst{0x50, *i2c};
-    static DEV::BQ79631 hv_monitor_inst{*spi, 0x0, *uart};
-    static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
     fuel_gauge = &fuel_gage_inst;
-    hv_monitor = &hv_monitor_inst;
     eeprom = &eeprom_inst;
-    bridge = &bridge_inst;
 
     /**
      * SENSOR SETUP
@@ -279,23 +293,17 @@ void msd::bms::BmsMaster::init() {
 
     #endif
     // ------- wakeup sequence ---------- //
-    // while (true){
     for (int l = 0; l < 2; l++) {
         hv_cs_gpio.writePin(IO::GPIO::State::LOW); // CS PIN LOW
         delay_us(2);// sleep for 2 us
         mosi_gpio.writePin(IO::GPIO::State::LOW);
-        core::time::wait(3);
+        core::time::wait(2); // sleep for 2.75 ms
+        delay_us(750);
         mosi_gpio.writePin(IO::GPIO::State::HIGH);
         delay_us(2);// sleep for 2 us
         hv_cs_gpio.writePin(IO::GPIO::State::HIGH); // CS PIN HIGH
+        core::time::wait(4);
     }
-// }
-
-
-    core::time::wait(30);
-
-    uint16_t id;
-    uint8_t ctrl1 = 0;
 
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
@@ -303,20 +311,34 @@ void msd::bms::BmsMaster::init() {
     }
     #endif
 
+    core::time::wait(20);
+
+    // delayed spi init
+    spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
+    spi->configureSPI(SPI_SPEED_2MHZ, IO::SPI::SPIMode::SPI_MODE0, SPI_MSB_FIRST);
+
+    // delayed slave device init
+    static DEV::BQ79631 hv_monitor_inst{*spi, 0x0, *uart};
+    static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
+    bridge = &bridge_inst;
+    hv_monitor = &hv_monitor_inst;
+
+
+    core::time::wait(10);
+
+    uint16_t id;
+    uint8_t ctrl1 = 0;
+
+
     // ------- auto addressing ---------- //
     constexpr uint8_t STACK_DEVICES = 1;
 
-    if (!bridge->autoAddressStack(STACK_DEVICES)) {
-        #ifdef BMS_DEBUG
-        uart->puts("ERROR: Auto-addressing failed\r\n");
-        #endif
-        return;
-    }
+    // After SEND_WAKE write
+    core::time::wait(5);
+
 
     // Write to CTRL1 register
-    // hv_cs_gpio.writePin(IO::GPIO::State::LOW); // CS PIN LOW
-    core::time::wait(1);
-    bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x10);
+    bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20);
 
     if (!write_ok) {
         #ifdef BMS_DEBUG
@@ -324,10 +346,20 @@ void msd::bms::BmsMaster::init() {
             uart->puts("ERROR: Write failed\r\n");
         }
         #endif
-        state_ = BmsState::FAULT;
+        // state_ = BmsState::FAULT;
         return;
     }
-    // hv_cs_gpio.writePin(IO::GPIO::State::HIGH); // CS PIN HIGH
+
+    core::time::wait(12*STACK_DEVICES);
+
+
+    // AUTO ADDRESSING
+    if (!bridge->autoAddressStack(STACK_DEVICES)) {
+        #ifdef BMS_DEBUG
+        uart->puts("ERROR: Auto-addressing failed\r\n");
+        #endif
+        // return;
+    }
     core::time::wait(10);
 
     #ifdef BMS_DEBUG
@@ -376,7 +408,7 @@ void msd::bms::BmsMaster::init() {
              }
              #endif
             // state_ = BmsState::FAULT;
-            return;
+            // return;
         }
     }
 
