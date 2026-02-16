@@ -15,6 +15,8 @@
  */
 
 #include "BMS.hpp"
+
+#include "core/utils/log.hpp"
 #define BMS_DEBUG
 
 namespace IO = core::io;
@@ -59,8 +61,8 @@ core::io::GPIO& fault_gpio = core::io::getGPIO<core::io::Pin::PC_2>();
 core::io::GPIO& latch_gpio = core::io::getGPIO<core::io::Pin::PC_3>();
 core::io::GPIO& cast_fault_gpio = core::io::getGPIO<core::io::Pin::PC_4>();
 core::io::GPIO& sw_en_shared_gpio = core::io::getGPIO<core::io::Pin::PC_5>();
-core::io::GPIO& mosi_gpio = core::io::getGPIO<core::io::Pin::PC_12>();
-core::io::GPIO& miso_gpio = core::io::getGPIO<core::io::Pin::PC_11>();
+// core::io::GPIO& mosi_gpio = core::io::getGPIO<core::io::Pin::PC_12>();
+// core::io::GPIO& miso_gpio = core::io::getGPIO<core::io::Pin::PC_11>();
 
 
 }
@@ -132,11 +134,11 @@ void msd::bms::BmsMaster::init() {
     dia_en_gpio.writePin(core::io::GPIO::State::LOW);
     sel1_gpio.writePin(core::io::GPIO::State::LOW);
     latch_gpio.writePin(core::io::GPIO::State::LOW);
-    // hv_cs_gpio.writePin(core::io::GPIO::State::HIGH);
+    hv_cs_gpio.writePin(core::io::GPIO::State::HIGH);
     can_gpio.writePin(IO::GPIO::State::HIGH);
     sw_en_shared_gpio.writePin(IO::GPIO::State::HIGH);
     fault_gpio.writePin(IO::GPIO::State::HIGH);
-    mosi_gpio.writePin(IO::GPIO::State::HIGH);
+    // mosi_gpio.writePin(IO::GPIO::State::HIGH);
 
 
 
@@ -167,8 +169,14 @@ void msd::bms::BmsMaster::init() {
 
     i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(); // i2c init
     can = &IO::getCAN<IO::Pin::PB_6, IO::Pin::PB_5>();
+    spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
+    spi->configureSPI(SPI_SPEED_4MHZ, IO::SPI::SPIMode::SPI_MODE1, SPI_MSB_FIRST);
+
     #ifdef BMS_DEBUG
     uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600); // uart init
+    core::log::LOGGER.setUART(uart);
+    core::log::LOGGER.setLogLevel(core::log::Logger::LogLevel::DEBUG);
+
     if (uart_safe_mode) {
         //uart safety
         if (!uart->isWritable())
@@ -179,6 +187,8 @@ void msd::bms::BmsMaster::init() {
     }
     #endif
 
+    uart->printf("SPI3 base address: 0x%08lX (expect 0x40003C00)\n", (uint32_t)SPI3);
+
 
     /**
      * ON-BOARD DEVICE INITILIZATION
@@ -187,8 +197,14 @@ void msd::bms::BmsMaster::init() {
      */
     static BQ34 fuel_gage_inst{i2c};
     static DEV::M24C32 eeprom_inst{0x50, *i2c};
+    static DEV::BQ79631 hv_monitor_inst{*spi, 0x0, *uart};
+    static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
+    bridge = &bridge_inst;
+    hv_monitor = &hv_monitor_inst;
     fuel_gauge = &fuel_gage_inst;
     eeprom = &eeprom_inst;
+
+    bridge->runSPITests();
 
     /**
      * SENSOR SETUP
@@ -278,50 +294,61 @@ void msd::bms::BmsMaster::init() {
     #endif
 
     /**
-     * SLACK DEVICE HANDSHAKE
-     * BQ79631 (HVM) + BQ79161 (slave)
+     * STACK DEVICE HANDSHAKE
+     * DAISY CHAIN: BQ79600 -> BQ79631 (HVM) -> BQ79161 (slave)
      * need to add success/failure verification (shouldn't fail though)
      */
-
-
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
         uart->puts("=== BQ79600 INITIALIZATION ===\r\n");
         uart->puts("---------------------------------------\r\n");
     }
-
-
     #endif
+
+
     // ------- wakeup sequence ---------- //
-    for (int l = 0; l < 2; l++) {
-        hv_cs_gpio.writePin(IO::GPIO::State::LOW); // CS PIN LOW
-        delay_us(2);// sleep for 2 us
-        mosi_gpio.writePin(IO::GPIO::State::LOW);
-        core::time::wait(2); // sleep for 2.75 ms
-        delay_us(750);
-        mosi_gpio.writePin(IO::GPIO::State::HIGH);
-        delay_us(2);// sleep for 2 us
-        hv_cs_gpio.writePin(IO::GPIO::State::HIGH); // CS PIN HIGH
-        core::time::wait(4);
+    // for (int l = 0; l < 2; l++) {
+    //     hv_cs_gpio.writePin(IO::GPIO::State::LOW); // CS PIN LOW
+    //     delay_us(2);// sleep for 2 us
+    //     mosi_gpio.writePin(IO::GPIO::State::LOW);
+    //     core::time::wait(2); // sleep for 2.75 ms
+    //     delay_us(750);
+    //     mosi_gpio.writePin(IO::GPIO::State::HIGH);
+    //     delay_us(2);// sleep for 2 us
+    //     hv_cs_gpio.writePin(IO::GPIO::State::HIGH); // CS PIN HIGH
+    //     core::time::wait(4);
+    // }
+
+    bridge->wake();
+
+
+
+    // spi test loop
+    uint8_t data;
+    while (true) {
+        // hv_cs_gpio.writePin(IO::GPIO::State::LOW);
+        spi->startTransmission(0x0);
+        core::time::wait(1000);
+        spi->write(0x00);
+        core::time::wait(1000);
+        spi->write(0xFF);
+        spi->endTransmission(0x0);
+        // hv_cs_gpio.writePin(IO::GPIO::State::HIGH);
+        core::time::wait(2000);
+        spi->startTransmission(0x0);
+        core::time::wait(1000);
+        spi->read(&data);
+        core::time::wait(1000);
+        spi->endTransmission(0x0);
+        core::time::wait(2000);
     }
+
 
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
         uart->puts("  Wake pulse complete\r\n");
     }
     #endif
-
-    core::time::wait(20);
-
-    // delayed spi init
-    spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
-    spi->configureSPI(SPI_SPEED_2MHZ, IO::SPI::SPIMode::SPI_MODE0, SPI_MSB_FIRST);
-
-    // delayed slave device init
-    static DEV::BQ79631 hv_monitor_inst{*spi, 0x0, *uart};
-    static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
-    bridge = &bridge_inst;
-    hv_monitor = &hv_monitor_inst;
 
 
     core::time::wait(10);
@@ -331,14 +358,14 @@ void msd::bms::BmsMaster::init() {
 
 
     // ------- auto addressing ---------- //
-    constexpr uint8_t STACK_DEVICES = 1;
+    constexpr uint8_t STACK_DEVICES = 2;
 
     // After SEND_WAKE write
     core::time::wait(5);
 
 
     // Write to CTRL1 register
-    bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20);
+    bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20); // send wake
 
     if (!write_ok) {
         #ifdef BMS_DEBUG
@@ -359,6 +386,9 @@ void msd::bms::BmsMaster::init() {
         uart->puts("ERROR: Auto-addressing failed\r\n");
         #endif
         // return;
+
+
+        bridge->autoAddressStack(STACK_DEVICES);
     }
     core::time::wait(10);
 

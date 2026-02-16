@@ -1,7 +1,7 @@
 /**
 @file BQ79631.hpp
 @brief C++ header for interfacing with the BQ79631 high voltage monitor.
-This header defines a class for communicating with the BQ79631 over I2C
+This header defines a class for communicating with the BQ79631 over SPI
 using STM32 HAL libraries.
 
 Project: MSD_BMS
@@ -12,20 +12,30 @@ Date: January 2026
 #ifndef MSD_EVT_BMS_BQ79631_H
 #define MSD_EVT_BMS_BQ79631_H
 
+#include "core/io/SPI.hpp"
+#include "core/io/UART.hpp"
 #include <cstdint>
-#include "core/io/I2C.hpp"
 
 namespace core::dev {
 
 class BQ79631 {
 public:
-    explicit BQ79631(core::io::I2C& i2c, uint8_t addr = 0x18);
+    explicit BQ79631(core::io::SPI& spi, uint8_t spi_device, core::io::UART& uart);
+
+    bool writeReg16(uint8_t dev, uint16_t reg, uint8_t val);
+
+    bool readReg16(uint8_t dev, uint16_t reg, uint8_t& val);
 
     /** Wake the device (send any I2C activity to wake) */
     bool wake();
 
+    bool ping();
+
     /** Read DEVICE_ID (should return 0x7963) */
     bool readDeviceID(uint16_t& id);
+
+    /** Read DEVICE REVISION (should return 0x7963) */
+    bool readRevision(uint8_t& id);
 
     /** Read pack voltage (mV) */
     bool getPackVoltage_mV(uint16_t& mv);
@@ -40,14 +50,12 @@ public:
     bool getFaultFlags(uint16_t& flags);
 
 private:
-    core::io::I2C& i2c_;
-    uint8_t addr_;
+    core::io::SPI& spi_;
+    uint8_t device_;
+    core::io::UART& uart_;
 
-    /** Send raw command frame */
-    bool sendCommand(uint8_t cmd, const uint8_t* payload = nullptr, uint8_t len = 0);
-
-    /** Read response frame */
-    bool readResponse(uint8_t* buffer, uint8_t len);
+    /** Command helpers */
+    bool readRegister(uint16_t reg, uint8_t* data, uint8_t len) const;
 };
 
 } // namespace core::dev

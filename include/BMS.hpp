@@ -21,13 +21,14 @@
 
 #include "Thermistor.hpp"
 // #include "core/dev/Thermistor.hpp"
+#include "core/dev/RTCTimer.hpp"
 #include "core/dev/storage/M24C32.hpp"
 #include "core/manager.hpp"
 #include "dev/BQ34.hpp"
+#include "dev/BQ79600.hpp"
 #include "dev/BQ79631.hpp"
-
 #include <cmath>
-
+#include <core/dev/LED.hpp>
 
 static constexpr uint32_t NORMAL_UPDATE_MS = 5000;
 static constexpr uint32_t FAST_UPDATE_MS   = 1000;
@@ -73,6 +74,7 @@ public:
      */
     void update();
 
+    void delay_us(uint32_t us);
 
     /**
      * @brief Shutdown the BMS master.
@@ -93,8 +95,26 @@ public:
      */
     bool is_initialized() const noexcept { return initialized_; }
 
+    void spiCommClear();
+
 
 private:
+
+    TIM_HandleTypeDef htim2_;
+
+    void Timer2_Init_1MHz() {
+        __HAL_RCC_TIM2_CLK_ENABLE();
+
+        htim2_.Instance = TIM2;
+        htim2_.Init.Prescaler = 83;
+        htim2_.Init.CounterMode = TIM_COUNTERMODE_UP;
+        htim2_.Init.Period = 0xFFFFFFFF;
+        htim2_.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+        htim2_.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+        HAL_TIM_Base_Init(&htim2_);
+        HAL_TIM_Base_Start(&htim2_);
+    }
 
     bool initialized_ = false;
 
@@ -140,6 +160,7 @@ private:
     // EEPROM
     core::io::ADC* therm_adcs_[5];
     ThermistorArray* thermistors_;
+
     struct ThermistorLogEntry {
         uint8_t sensor_id;
         uint32_t timestamp;

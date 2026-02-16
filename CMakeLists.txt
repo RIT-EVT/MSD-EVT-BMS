@@ -11,9 +11,9 @@ if(EVT_CORE_LOG_ENABLE)
 endif()
 
 # Handle selection of the target device
-option(TARGET_DEV "Target device" "STM32F334x8")
+option(TARGET_DEV "Target device" "STM32F446x8")
 if(NOT TARGET_DEV)
-    set(TARGET_DEV "STM32F334x8")
+    set(TARGET_DEV "STM32F446x8")
 endif()
 
 if(TARGET_DEV STREQUAL "STM32F302x8")
@@ -66,6 +66,11 @@ add_library(${PROJECT_NAME} STATIC
         src/Thermistor.cpp
         include/dev/BQ79631.hpp
         src/dev/BQ79631.cpp
+        src/dev/LED.cpp
+        include/dev/BQ79600.hpp
+        src/dev/BQ79600.cpp
+        include/dev/spi.hpp
+        src/dev/spi.cpp
 )
 
 # Add sources
