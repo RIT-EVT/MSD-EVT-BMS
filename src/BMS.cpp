@@ -61,8 +61,8 @@ core::io::GPIO& fault_gpio = core::io::getGPIO<core::io::Pin::PC_2>();
 core::io::GPIO& latch_gpio = core::io::getGPIO<core::io::Pin::PC_3>();
 core::io::GPIO& cast_fault_gpio = core::io::getGPIO<core::io::Pin::PC_4>();
 core::io::GPIO& sw_en_shared_gpio = core::io::getGPIO<core::io::Pin::PC_5>();
-// core::io::GPIO& mosi_gpio = core::io::getGPIO<core::io::Pin::PC_12>();
-// core::io::GPIO& miso_gpio = core::io::getGPIO<core::io::Pin::PC_11>();
+core::io::GPIO& mosi_gpio = core::io::getGPIO<core::io::Pin::PC_12>();
+core::io::GPIO& miso_gpio = core::io::getGPIO<core::io::Pin::PC_11>();
 
 
 }
@@ -115,6 +115,94 @@ void msd::bms::BmsMaster::delay_us(uint32_t us) {
     }
 }
 
+void msd::bms::BmsMaster::gpiowake()
+{
+    // ============================================================
+    // BQ79600 Wake Sequence (GPIO bit-bang)
+    //
+    // Per datasheet:
+    // tCSS  = 2µs   (CS setup time before MOSI)
+    // tWAKE = 2.75ms minimum (MOSI LOW pulse width)
+    // tCSH  = 2µs   (CS hold time after MOSI)
+    // tSU   = 4ms   (device wake-up time between pulses)
+    // tREADY = 10ms (device ready time after second pulse)
+    //
+    // Sequence:
+    // 1. CS LOW
+    // 2. Wait tCSS (2µs)
+    // 3. MOSI LOW (wake pulse)
+    // 4. Wait tWAKE (2.75ms)
+    // 5. MOSI HIGH
+    // 6. Wait tCSH (2µs)
+    // 7. CS HIGH
+    // 8. Wait tSU (4ms)
+    // 9. Repeat steps 1-8 for second pulse
+    // 10. Wait tREADY (10ms)
+    // ============================================================
+
+    // Make sure SPI peripheral doesn't interfere
+    // Reconfigure MOSI and CS as GPIO outputs temporarily
+    GPIOC->MODER &= ~GPIO_MODER_MODE12;        // Clear MOSI (PC12)
+    GPIOC->MODER |= GPIO_MODER_MODE12_0;       // Set as output
+    GPIOA->MODER &= ~GPIO_MODER_MODE15;        // Clear CS (PA15)
+    GPIOA->MODER |= GPIO_MODER_MODE15_0;       // Set as output
+
+    #ifdef BMS_DEBUG
+    if (uart_safe_mode) {
+        uart->puts("Sending GPIO wake pulse...\r\n");
+    }
+    #endif
+
+    for (int pulse = 0; pulse < 2; pulse++) {
+
+        // #ifdef BMS_DEBUG
+        // if (uart_safe_mode) {
+        //     uart->printf("  Wake pulse %d/2\r\n", pulse + 1);
+        // }
+        // #endif
+
+        // CS LOW
+        hv_cs_gpio.writePin(IO::GPIO::State::LOW);
+        delay_us(2);  // tCSS
+
+        // MOSI LOW - start wake pulse
+        mosi_gpio.writePin(IO::GPIO::State::LOW);
+        core::time::wait(2);   // 2ms
+        delay_us(300);         // + 750µs = 2.75ms total
+
+        // MOSI HIGH - end wake pulse
+        mosi_gpio.writePin(IO::GPIO::State::HIGH);
+        delay_us(2);  // tCSH
+
+        // CS HIGH
+        hv_cs_gpio.writePin(IO::GPIO::State::HIGH);
+
+        // Wait for device to process wake pulse
+        // Skip delay after last pulse, tREADY handles it
+        // if (pulse < 1) {
+        //     core::time::wait(4);  // tSU between pulses
+        // }
+        // delay_us(1);
+    }
+
+    // tREADY - wait for device to be ready
+    core::time::wait(2);
+
+    // ============================================================
+    // Restore MOSI to SPI alternate function
+    // ============================================================
+    GPIOC->MODER &= ~GPIO_MODER_MODE12;        // Clear MOSI
+    GPIOC->MODER |= GPIO_MODER_MODE12_1;       // Restore AF mode
+    GPIOC->AFR[1] &= ~(0xF << ((12-8)*4));
+    GPIOC->AFR[1] |= (6 << ((12-8)*4));        // AF6 = SPI3
+
+    #ifdef BMS_DEBUG
+    if (uart_safe_mode) {
+        uart->puts("Wake sequence complete\r\n");
+    }
+    #endif
+}
+
 /* Initialization of the BMS master. */
 void msd::bms::BmsMaster::init() {
     if (initialized_) {
@@ -138,7 +226,7 @@ void msd::bms::BmsMaster::init() {
     can_gpio.writePin(IO::GPIO::State::HIGH);
     sw_en_shared_gpio.writePin(IO::GPIO::State::HIGH);
     fault_gpio.writePin(IO::GPIO::State::HIGH);
-    // mosi_gpio.writePin(IO::GPIO::State::HIGH);
+    mosi_gpio.writePin(IO::GPIO::State::HIGH);
 
 
 
@@ -170,7 +258,7 @@ void msd::bms::BmsMaster::init() {
     i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(); // i2c init
     can = &IO::getCAN<IO::Pin::PB_6, IO::Pin::PB_5>();
     spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
-    spi->configureSPI(SPI_SPEED_4MHZ, IO::SPI::SPIMode::SPI_MODE1, SPI_MSB_FIRST);
+    spi->configureSPI(SPI_SPEED_2MHZ, IO::SPI::SPIMode::SPI_MODE1, SPI_MSB_FIRST);
 
     #ifdef BMS_DEBUG
     uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600); // uart init
@@ -187,8 +275,6 @@ void msd::bms::BmsMaster::init() {
     }
     #endif
 
-    uart->printf("SPI3 base address: 0x%08lX (expect 0x40003C00)\n", (uint32_t)SPI3);
-
 
     /**
      * ON-BOARD DEVICE INITILIZATION
@@ -204,7 +290,7 @@ void msd::bms::BmsMaster::init() {
     fuel_gauge = &fuel_gage_inst;
     eeprom = &eeprom_inst;
 
-    bridge->runSPITests();
+    // bridge->runSPITests();
 
     /**
      * SENSOR SETUP
@@ -318,40 +404,43 @@ void msd::bms::BmsMaster::init() {
     //     hv_cs_gpio.writePin(IO::GPIO::State::HIGH); // CS PIN HIGH
     //     core::time::wait(4);
     // }
-
-    bridge->wake();
+    // while (true) {
+    // bridge->wake();
+    gpiowake();
+    //     core::time::wait(1000);
+    // }
 
 
 
     // spi test loop
     uint8_t data;
-    while (true) {
-        // hv_cs_gpio.writePin(IO::GPIO::State::LOW);
-        spi->startTransmission(0x0);
-        core::time::wait(1000);
-        spi->write(0x00);
-        core::time::wait(1000);
-        spi->write(0xFF);
-        spi->endTransmission(0x0);
-        // hv_cs_gpio.writePin(IO::GPIO::State::HIGH);
-        core::time::wait(2000);
-        spi->startTransmission(0x0);
-        core::time::wait(1000);
-        spi->read(&data);
-        core::time::wait(1000);
-        spi->endTransmission(0x0);
-        core::time::wait(2000);
-    }
+    // while (true) {
+    //     // hv_cs_gpio.writePin(IO::GPIO::State::LOW);
+    //     spi->startTransmission(0x0);
+    //     core::time::wait(1000);
+    //     spi->write(0xB6);
+    //     core::time::wait(1000);
+    //     spi->write(0xA9);
+    //     spi->endTransmission(0x0);
+    //     // hv_cs_gpio.writePin(IO::GPIO::State::HIGH);
+    //     core::time::wait(2000);
+    //     spi->startTransmission(0x0);
+    //     // core::time::wait(1000);
+    //     spi->read(&data);
+    //     // core::time::wait(1000);
+    //     spi->endTransmission(0x0);
+    //     core::time::wait(2000);
+    // }
 
 
-    #ifdef BMS_DEBUG
-    if (uart_safe_mode) {
-        uart->puts("  Wake pulse complete\r\n");
-    }
-    #endif
+    // #ifdef BMS_DEBUG
+    // if (uart_safe_mode) {
+    //     uart->puts("  Wake pulse complete\r\n");
+    // }
+    // #endif
 
 
-    core::time::wait(10);
+    // core::time::wait(10);
 
     uint16_t id;
     uint8_t ctrl1 = 0;
@@ -361,21 +450,21 @@ void msd::bms::BmsMaster::init() {
     constexpr uint8_t STACK_DEVICES = 2;
 
     // After SEND_WAKE write
-    core::time::wait(5);
+    // core::time::wait(5);
 
 
     // Write to CTRL1 register
-    bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20); // send wake
+    // bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20); // send wake
 
-    if (!write_ok) {
-        #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("ERROR: Write failed\r\n");
-        }
-        #endif
-        // state_ = BmsState::FAULT;
-        return;
-    }
+    // if (!write_ok) {
+    //     #ifdef BMS_DEBUG
+    //     if (uart_safe_mode) {
+    //         uart->puts("ERROR: Write failed\r\n");
+    //     }
+    //     #endif
+    //     // state_ = BmsState::FAULT;
+    //     return;
+    // }
 
     core::time::wait(12*STACK_DEVICES);
 
@@ -391,6 +480,8 @@ void msd::bms::BmsMaster::init() {
         bridge->autoAddressStack(STACK_DEVICES);
     }
     core::time::wait(10);
+
+    bridge->initRegisters();
 
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {

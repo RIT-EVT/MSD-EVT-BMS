@@ -69,8 +69,6 @@ add_library(${PROJECT_NAME} STATIC
         src/dev/LED.cpp
         include/dev/BQ79600.hpp
         src/dev/BQ79600.cpp
-        include/dev/spi.hpp
-        src/dev/spi.cpp
 )
 
 # Add sources

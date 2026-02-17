@@ -58,6 +58,8 @@ public:
     BmsMaster(BmsMaster&&) = delete;
     BmsMaster& operator=(BmsMaster&&) = delete;
 
+    void gpiowake();
+
     /**
      * @brief Initialize the BMS master.
      *
