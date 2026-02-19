@@ -147,6 +147,9 @@ void msd::bms::BmsMaster::gpiowake()
     GPIOA->MODER &= ~GPIO_MODER_MODE15;        // Clear CS (PA15)
     GPIOA->MODER |= GPIO_MODER_MODE15_0;       // Set as output
 
+    // create a pwm signal to simulate a clk signal during wakeup
+
+
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
         uart->puts("Sending GPIO wake pulse...\r\n");
@@ -393,54 +396,22 @@ void msd::bms::BmsMaster::init() {
 
 
     // ------- wakeup sequence ---------- //
-    // for (int l = 0; l < 2; l++) {
-    //     hv_cs_gpio.writePin(IO::GPIO::State::LOW); // CS PIN LOW
-    //     delay_us(2);// sleep for 2 us
-    //     mosi_gpio.writePin(IO::GPIO::State::LOW);
-    //     core::time::wait(2); // sleep for 2.75 ms
-    //     delay_us(750);
-    //     mosi_gpio.writePin(IO::GPIO::State::HIGH);
-    //     delay_us(2);// sleep for 2 us
-    //     hv_cs_gpio.writePin(IO::GPIO::State::HIGH); // CS PIN HIGH
-    //     core::time::wait(4);
-    // }
-    // while (true) {
-    // bridge->wake();
     gpiowake();
-    //     core::time::wait(1000);
-    // }
 
+    // try to read something
+    uint8_t readback = 0;
+    bridge->singleRead(0x0, 0x2104, readback);
 
+    #ifdef BMS_DEBUG
+    if (uart_safe_mode) {
+        uart->printf("Readback value: 0x%X\r\n", readback);
+        uart->puts("---------------------------------------\r\n");
+    }
+    #endif
 
-    // spi test loop
-    uint8_t data;
-    // while (true) {
-    //     // hv_cs_gpio.writePin(IO::GPIO::State::LOW);
-    //     spi->startTransmission(0x0);
-    //     core::time::wait(1000);
-    //     spi->write(0xB6);
-    //     core::time::wait(1000);
-    //     spi->write(0xA9);
-    //     spi->endTransmission(0x0);
-    //     // hv_cs_gpio.writePin(IO::GPIO::State::HIGH);
-    //     core::time::wait(2000);
-    //     spi->startTransmission(0x0);
-    //     // core::time::wait(1000);
-    //     spi->read(&data);
-    //     // core::time::wait(1000);
-    //     spi->endTransmission(0x0);
-    //     core::time::wait(2000);
-    // }
+    // hang here
+    while (true);
 
-
-    // #ifdef BMS_DEBUG
-    // if (uart_safe_mode) {
-    //     uart->puts("  Wake pulse complete\r\n");
-    // }
-    // #endif
-
-
-    // core::time::wait(10);
 
     uint16_t id;
     uint8_t ctrl1 = 0;
@@ -454,17 +425,17 @@ void msd::bms::BmsMaster::init() {
 
 
     // Write to CTRL1 register
-    // bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20); // send wake
+    bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20); // send wake
 
-    // if (!write_ok) {
-    //     #ifdef BMS_DEBUG
-    //     if (uart_safe_mode) {
-    //         uart->puts("ERROR: Write failed\r\n");
-    //     }
-    //     #endif
-    //     // state_ = BmsState::FAULT;
-    //     return;
-    // }
+    if (!write_ok) {
+        #ifdef BMS_DEBUG
+        if (uart_safe_mode) {
+            uart->puts("ERROR: Write failed\r\n");
+        }
+        #endif
+        // state_ = BmsState::FAULT;
+        return;
+    }
 
     core::time::wait(12*STACK_DEVICES);
 
@@ -482,6 +453,8 @@ void msd::bms::BmsMaster::init() {
     core::time::wait(10);
 
     bridge->initRegisters();
+
+    //--------------- ERROR POINT ------------------//
 
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
