@@ -56,9 +56,125 @@ bool BQ79600::wake() {
     }
 
     // Wait for device to initialize (tSU(WAKE_SHUT) = 2-3.5ms)
-    // core::time::wait(4);  // 4ms to be safe
+    core::time::wait(4);  // 4ms to be safe
 
     singleWrite(0x00, 0x0309, 0x20); // send wake
+
+    return true;
+}
+
+bool BQ79600::init() {
+
+    core::time::wait(10);  // tREADY
+
+    // ============================================================
+    // Step 2: Check if device is responding (verify ACTIVE mode)
+    // Read DEV_CONF1 - should return 0x14
+    // ============================================================
+#ifdef BMS_DEBUG
+    uart_.puts("Step 2: Checking device presence...\r\n");
+#endif
+
+    uint8_t dev_conf = 0;
+    bool read_success = singleRead(0x00, REG_DEV_CONF1, dev_conf);
+
+    if (!read_success || dev_conf != 0x14) {
+#ifdef BMS_DEBUG
+        uart_.printf("Device not responding. DEV_CONF1 = 0x%02X (expect 0x14)\r\n", dev_conf);
+        uart_.puts("Trying different SPI modes...\r\n");
+#endif
+
+        // Try all 4 SPI modes to find the correct one
+        return false;  // Caller should try different SPI modes
+    }
+
+#ifdef BMS_DEBUG
+    uart_.printf("✓ DEV_CONF1 = 0x%02X - Device in ACTIVE mode!\r\n", dev_conf);
+#endif
+
+    // ============================================================
+    // Step 3: Configure CONTROL1 to stay in ACTIVE mode
+    // bit[5] = SPI_ACTIVE = 1 (keep SPI active)
+    // bit[0] = SEND_WAKE = 0 (don't propagate wake yet)
+    // ============================================================
+#ifdef BMS_DEBUG
+    uart_.puts("Step 3: Configuring CONTROL1...\r\n");
+#endif
+
+    if (!singleWrite(0x00, REG_CONTROL1, 0x20)) {
+#ifdef BMS_DEBUG
+        uart_.puts("ERROR: CONTROL1 write failed\r\n");
+#endif
+        return false;
+    }
+
+    core::time::wait(2);
+
+    // Verify CONTROL1 write
+    uint8_t ctrl1_verify = 0;
+    singleRead(0x00, REG_CONTROL1, ctrl1_verify);
+
+#ifdef BMS_DEBUG
+    uart_.printf("  CONTROL1 = 0x%02X (expect 0x20) %s\r\n",
+                 ctrl1_verify,
+                 ctrl1_verify == 0x20 ? "✓" : "✗");
+#endif
+
+    // ============================================================
+    // Step 4: Disable communication timeout
+    // Prevents auto-sleep due to communication gaps
+    // ============================================================
+#ifdef BMS_DEBUG
+    uart_.puts("Step 4: Disabling communication timeout...\r\n");
+#endif
+
+    singleWrite(0x00, 0x0302, 0x02);  // COMM_TIMEOUT[CTL_ACT] = 1
+    core::time::wait(1);
+
+    // ============================================================
+    // Step 5: Clear any fault flags
+    // ============================================================
+#ifdef BMS_DEBUG
+    uart_.puts("Step 5: Clearing fault flags...\r\n");
+#endif
+
+    singleWrite(0x00, 0x030C, 0xFF);  // FAULT_RST1
+    singleWrite(0x00, 0x030D, 0xFF);  // FAULT_RST2
+    core::time::wait(1);
+
+    // ============================================================
+    // Step 6: Verify FAULT_SUMMARY is clear
+    // ============================================================
+    uint8_t fault_sum = 0;
+    singleRead(0x00, 0x030E, fault_sum);
+
+#ifdef BMS_DEBUG
+    uart_.printf("  FAULT_SUMMARY = 0x%02X (expect 0x00) %s\r\n",
+                 fault_sum,
+                 fault_sum == 0x00 ? "✓" : "⚠");
+#endif
+
+    // ============================================================
+    // Step 7: Read Device ID
+    // ============================================================
+#ifdef BMS_DEBUG
+    uart_.puts("Step 7: Reading Device ID...\r\n");
+#endif
+
+    uint16_t device_id = 0;
+    if (readDeviceID(device_id)) {
+#ifdef BMS_DEBUG
+        uart_.printf("  Device ID = 0x%04X ✓\r\n", device_id);
+#endif
+    } else {
+#ifdef BMS_DEBUG
+        uart_.puts("  WARNING: Could not read Device ID\r\n");
+#endif
+    }
+
+#ifdef BMS_DEBUG
+    uart_.puts("=== INIT COMPLETE - Device in ACTIVE mode ===\r\n\n");
+#endif
 
     return true;
 }
@@ -374,7 +490,7 @@ bool BQ79600::writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, boo
 
 bool BQ79600::readReg16(uint8_t dev, uint16_t reg, uint8_t& val, bool stack)
 {
-    uint8_t rx_frame[6];
+    uint8_t rx_frame[7] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF}; // required to receive data!!
     uint8_t frame[7];
     uint8_t frame_len;
 
@@ -440,18 +556,22 @@ bool BQ79600::readReg16(uint8_t dev, uint16_t reg, uint8_t& val, bool stack)
         return false;
 
     // Clock out 6 bytes (sends dummy data, captures MISO)
-    core::io::SPI::SPIStatus spiStatus = spi_.read(rx_frame, 6);
+    core::io::SPI::SPIStatus spiStatus = core::io::SPI::SPIStatus::OK;
+    for (int i = 0; i < 8; i++) {
+        spiStatus = spi_.read(&rx_frame[i]);
+    }
+    // core::io::SPI::SPIStatus spiStatus = spi_.read(rx_frame, 6);
     if (spiStatus != core::io::SPI::SPIStatus::OK) {
         spi_.endTransmission(device_);
         return false;
     }
 
-        core::time::wait(1);
+        // core::time::wait(1);
 
 
     spi_.endTransmission(device_);
 
-    // core::time::wait(1);  // 1ms delay
+    core::time::wait(1);  // 1ms delay
 
 
     #ifdef BMS_DEBUG
@@ -486,264 +606,5 @@ bool BQ79600::readReg16(uint8_t dev, uint16_t reg, uint8_t& val, bool stack)
     }
     return (calc_crc == rx_crc) && (reg_addr == reg);
 }
-
-
-// tests
-// Add this to BQ79600.cpp
-//
-// void BQ79600::runSPITests() {
-//     uart_.puts("\n========================================\n");
-//     uart_.puts("    BQ79600 SPI DIAGNOSTIC TESTS\n");
-//     uart_.puts("========================================\n\n");
-//
-//     // Test 1: Basic SPI functionality
-//     uart_.puts("TEST 1: Basic SPI Write\n");
-//     uart_.puts("----------------------------------------\n");
-//     testBasicSPI();
-//     core::time::wait(100);
-//
-//     // Test 2: Simple read attempt
-//     uart_.puts("\nTEST 2: Simple Read Test\n");
-//     uart_.puts("----------------------------------------\n");
-//     testReadWrite();
-//     core::time::wait(100);
-//
-//     // Test 3: Wake sequence
-//     uart_.puts("\nTEST 3: Wake Sequence\n");
-//     uart_.puts("----------------------------------------\n");
-//     testWakeSequence();
-//     core::time::wait(100);
-//
-//     // Test 4: Loopback (if you can connect MOSI to MISO)
-//     uart_.puts("\nTEST 4: Loopback Test\n");
-//     uart_.puts("----------------------------------------\n");
-//     uart_.puts("Connect MOSI (PC12) to MISO (PC11) for this test\n");
-//     uart_.puts("Press any key when ready...\n");
-//     core::time::wait(2000);
-//     loopbackTest();
-//
-//     uart_.puts("\n========================================\n");
-//     uart_.puts("    TESTS COMPLETE\n");
-//     uart_.puts("========================================\n\n");
-// }
-//
-// bool BQ79600::testBasicSPI() {
-//     uart_.puts("Sending simple byte pattern...\n");
-//     uart_.puts("Watch: CS, CLK, MOSI on scope\n\n");
-//
-//     uint8_t test_pattern[] = {0x00, 0xFF, 0xAA, 0x55, 0x0F, 0xF0};
-//
-//     if (!spi_.startTransmission(device_)) {
-//         uart_.puts("ERROR: startTransmission failed\n");
-//         return false;
-//     }
-//
-//     uart_.puts("TX: ");
-//     for (uint8_t byte : test_pattern) {
-//         uart_.printf("%02X ", byte);
-//         if (spi_.write(byte) != core::io::SPI::SPIStatus::OK) {
-//             uart_.puts("\nERROR: SPI write failed\n");
-//             spi_.endTransmission(device_);
-//             return false;
-//         }
-//         core::time::wait(10); // Slow down for scope viewing
-//     }
-//     uart_.puts("\n");
-//
-//     spi_.endTransmission(device_);
-//     uart_.puts("SUCCESS: Basic write complete\n");
-//     return true;
-// }
-
-// bool BQ79600::testReadWrite() {
-//     uart_.puts("Testing SPI read (MISO should respond)...\n");
-//     uart_.puts("Watch: MISO line should go LOW during reads\n\n");
-//
-//     // Send a simple write command first
-//     uint8_t write_cmd[] = {0x90, 0x00, 0x03, 0x09, 0x00};
-//     uint16_t crc = crc16(write_cmd, 5);
-//
-//     uart_.puts("WRITE PHASE:\n");
-//     uart_.printf("TX: 90 00 03 09 00 %02X %02X\n", crc & 0xFF, (crc >> 8) & 0xFF);
-//
-//     if (!spi_.startTransmission(device_))
-//         return false;
-//
-//     spi_.write(write_cmd, 5);
-//     spi_.write(crc & 0xFF);
-//     spi_.write((crc >> 8) & 0xFF);
-//
-//     spi_.endTransmission(device_);
-//     core::time::wait(2);
-//
-//     // Now try to read
-//     uart_.puts("\nREAD PHASE:\n");
-//     uart_.puts("Sending read command...\n");
-//
-//     uint8_t read_cmd[] = {0x80, 0x00, 0x03, 0x09, 0x00};
-//     crc = crc16(read_cmd, 5);
-//
-//     uart_.printf("TX: 80 00 03 09 00 %02X %02X\n", crc & 0xFF, (crc >> 8) & 0xFF);
-//
-//     if (!spi_.startTransmission(device_))
-//         return false;
-//
-//     spi_.write(read_cmd, 5);
-//     spi_.write(crc & 0xFF);
-//     spi_.write((crc >> 8) & 0xFF);
-//
-//     spi_.endTransmission(device_);
-//     core::time::wait(2);
-//
-//     // Read response
-//     uart_.puts("Reading response...\n");
-//     uart_.puts(">>> WATCH MISO NOW <<<\n");
-//
-//     uint8_t response[6];
-//
-//     if (!spi_.startTransmission(device_))
-//         return false;
-//
-//     for (int i = 0; i < 6; i++) {
-//         if (spi_.read(&response[i]) != core::io::SPI::SPIStatus::OK) {
-//             uart_.puts("ERROR: Read failed\n");
-//             spi_.endTransmission(device_);
-//             return false;
-//         }
-//     }
-//
-//     spi_.endTransmission(device_);
-//
-//     uart_.printf("RX: ");
-//     for (int i = 0; i < 6; i++) {
-//         uart_.printf("%02X ", response[i]);
-//     }
-//     uart_.puts("\n");
-//
-//     if (response[0] == 0xFF && response[1] == 0xFF) {
-//         uart_.puts("WARNING: All 0xFF - MISO stuck high or device not responding\n");
-//         return false;
-//     }
-//
-//     uart_.puts("SUCCESS: Got response\n");
-//     return true;
-// }
-//
-// bool BQ79600::testWakeSequence() {
-//     uart_.puts("Sending wake pulse...\n");
-//     uart_.puts("Watch: CS should be LOW, MOSI should be LOW for ~2.8ms\n\n");
-//
-//     if (!spi_.startTransmission(device_)) {
-//         uart_.puts("ERROR: startTransmission failed\n");
-//         return false;
-//     }
-//
-//     uart_.puts("Sending 350 x 0x00 bytes at ~1MHz...\n");
-//
-//     for (int i = 0; i < 350; i++) {
-//         spi_.write(0x00);
-//     }
-//
-//     spi_.endTransmission(device_);
-//     uart_.puts("Wake pulse complete\n");
-//     uart_.puts("Waiting 4ms for device wake...\n");
-//     core::time::wait(4);
-//
-//     uart_.puts("SUCCESS: Wake sequence complete\n");
-//     return true;
-// }
-//
-// void BQ79600::loopbackTest() {
-//     uart_.puts("Running loopback test (MOSI -> MISO)...\n");
-//     uart_.puts("This verifies SPI read functionality\n\n");
-//
-//     uint8_t test_bytes[] = {0x00, 0xFF, 0xAA, 0x55, 0x0F, 0xF0, 0x12, 0x34};
-//     bool all_passed = true;
-//
-//     if (!spi_.startTransmission(device_)) {
-//         uart_.puts("ERROR: startTransmission failed\n");
-//         return;
-//     }
-//
-//     for (uint8_t tx_byte : test_bytes) {
-//         uint8_t rx_byte = 0;
-//
-//         // SPI is full-duplex, so we write and read simultaneously
-//         // Write the byte
-//         if (spi_.write(tx_byte) != core::io::SPI::SPIStatus::OK) {
-//             uart_.puts("ERROR: Write failed\n");
-//             all_passed = false;
-//             break;
-//         }
-//
-//         // Now read what we should have received
-//         // (In a true loopback, we'd see the same byte we sent)
-//         // But since write() already clears RX, we need to do another transaction
-//     }
-//
-//     spi_.endTransmission(device_);
-//
-//     // Alternative loopback: Write then read
-//     core::time::wait(10);
-//
-//     uart_.puts("\nAlternative loopback method:\n");
-//
-//     for (uint8_t tx_byte : test_bytes) {
-//         if (!spi_.startTransmission(device_))
-//             break;
-//
-//         // Use transfer-style operation
-//         spi_.write(tx_byte);
-//
-//         uint8_t rx_byte = 0;
-//         spi_.read(&rx_byte);
-//
-//         spi_.endTransmission(device_);
-//
-//         uart_.printf("TX: 0x%02X  RX: 0x%02X  ", tx_byte, rx_byte);
-//
-//         if (rx_byte == tx_byte) {
-//             uart_.puts("✓ PASS\n");
-//         } else {
-//             uart_.puts("✗ FAIL\n");
-//             all_passed = false;
-//         }
-//
-//         core::time::wait(10);
-//     }
-//
-//     if (all_passed) {
-//         uart_.puts("\nSUCCESS: All loopback tests passed\n");
-//         uart_.puts("SPI read/write is working correctly\n");
-//     } else {
-//         uart_.puts("\nFAILURE: Some loopback tests failed\n");
-//         uart_.puts("Check MISO configuration\n");
-//     }
-// }
-
-// Continuous pattern generator for scope triggering
-// void BQ79600::scopeTriggerPattern() {
-//     uart_.puts("\n========================================\n");
-//     uart_.puts("  SCOPE TRIGGER PATTERN (Infinite Loop)\n");
-//     uart_.puts("========================================\n");
-//     uart_.puts("Sending repeating pattern for scope triggering\n");
-//     uart_.puts("Pattern: 0xAA 0x55 0xAA 0x55 ... (100ms period)\n");
-//     uart_.puts("Press RESET to stop\n\n");
-//
-//     while (true) {
-//         if (!spi_.startTransmission(device_))
-//             continue;
-//
-//         // Distinctive pattern for scope triggering
-//         spi_.write(0xAA);
-//         spi_.write(0x55);
-//         spi_.write(0xAA);
-//         spi_.write(0x55);
-//
-//         spi_.endTransmission(device_);
-//
-//         core::time::wait(100); // 100ms between bursts
-//     }
-// }
 
 }

@@ -76,6 +76,95 @@ msd::bms::BmsMaster& msd::bms::BmsMaster::instance() {
     static msd::bms::BmsMaster instance;
     return instance;
 }
+//
+// static constexpr uint8_t ADXL345_DEVICE = 0;
+// static constexpr uint8_t ADXL345_DEVID  = 0x00;
+// static constexpr uint8_t ADXL345_POWER_CTL = 0x2D;
+//
+// void ADXL345_SPI_Test(core::io::SPI& spi)
+// {
+//     // -------------------------------------------------
+//     // 1) Configure SPI for ADXL345
+//     // -------------------------------------------------
+//     spi.configureSPI(
+//         SPI_SPEED_1MHZ,          // safe startup speed
+//         core::io::SPI::SPIMode::SPI_MODE3, // CPOL=1, CPHA=1
+//         SPI_MSB_FIRST
+//     );
+//
+//     uint8_t deviceId = 0;
+//
+//     // -------------------------------------------------
+//     // 2) Read DEVID register (0x00)
+//     // -------------------------------------------------
+//     if (spi.startTransmission(ADXL345_DEVICE))
+//     {
+//         uint8_t readCmd = 0x80 | ADXL345_DEVID; // R=1, MB=0
+//
+//         spi.write(readCmd);
+//         spi.read(&deviceId);
+//
+//         spi.endTransmission(ADXL345_DEVICE);
+//     }
+//
+//     // At this point:
+//     // deviceId should equal 0xE5
+//     // Set breakpoint here to verify
+//
+//     uart->printf("Device ID: 0x%X\r\n", deviceId);
+//     core::time::wait(2);
+//
+//
+//     // -------------------------------------------------
+//     // 3) Put device into Measurement Mode
+//     //    Write 0x08 to POWER_CTL (0x2D)
+//     // -------------------------------------------------
+//     spi.writeReg(0, 0x31 & 0x3F, 0x0B);
+//     spi.writeReg(0, 0x2D & 0x3F, 0x08);
+//     spi.writeReg(0, 0x2E & 0x3F, 0x80);
+//
+//
+//     // -------------------------------------------------
+//     // 4) Read it back to verify write worked
+//     // -------------------------------------------------
+//     uint8_t verify = 0;
+//     if (spi.startTransmission(0))
+//     {
+//         uint8_t cmd = 0x80 | 0x2D; // read POWER_CTL
+//         spi.write(cmd);
+//         spi.read(&verify);
+//         spi.endTransmission(0);
+//     }
+//
+//     uint8_t df = 0;
+//     if (spi.startTransmission(0))
+//     {
+//         spi.write(0x80 | 0x31);
+//         spi.read(&df);
+//         spi.endTransmission(0);
+//     }
+//
+//     // verify should equal 0x08 df should equal 0xB
+//     // If so, full write/read path works.
+//     uart->printf("Read value: 0x%X\r\n", verify);
+//     uart->printf("DATA_FORMAT: 0x%X\r\n", df);
+//
+//     uint8_t raw[6];
+//
+//     if (spi.startTransmission(0))
+//     {
+//         uint8_t cmd = 0xC0 | 0x32;
+//         spi.write(cmd);
+//         spi.read(raw, 6);
+//         spi.endTransmission(0);
+//     }
+//
+//     int16_t x = (int16_t)((raw[1] << 8) | raw[0]);
+//     int16_t y = (int16_t)((raw[3] << 8) | raw[2]);
+//     int16_t z = (int16_t)((raw[5] << 8) | raw[4]);
+//
+//     uart->printf("X:%d Y:%d Z:%d\r\n", x, y, z);
+// }
 
 void msd::bms::BmsMaster::spiCommClear()
 {
@@ -138,6 +227,8 @@ void msd::bms::BmsMaster::gpiowake()
     // 8. Wait tSU (4ms)
     // 9. Repeat steps 1-8 for second pulse
     // 10. Wait tREADY (10ms)
+    //
+    // note: timing in code has been verified to align with desired timing
     // ============================================================
 
     // Make sure SPI peripheral doesn't interfere
@@ -157,12 +248,6 @@ void msd::bms::BmsMaster::gpiowake()
     #endif
 
     for (int pulse = 0; pulse < 2; pulse++) {
-
-        // #ifdef BMS_DEBUG
-        // if (uart_safe_mode) {
-        //     uart->printf("  Wake pulse %d/2\r\n", pulse + 1);
-        // }
-        // #endif
 
         // CS LOW
         hv_cs_gpio.writePin(IO::GPIO::State::LOW);
@@ -261,7 +346,8 @@ void msd::bms::BmsMaster::init() {
     i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(); // i2c init
     can = &IO::getCAN<IO::Pin::PB_6, IO::Pin::PB_5>();
     spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
-    spi->configureSPI(SPI_SPEED_2MHZ, IO::SPI::SPIMode::SPI_MODE1, SPI_MSB_FIRST);
+
+    // spi->configureSPI(SPI_SPEED_2MHZ, IO::SPI::SPIMode::SPI_MODE1, SPI_MSB_FIRST);
 
     #ifdef BMS_DEBUG
     uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600); // uart init
@@ -278,6 +364,9 @@ void msd::bms::BmsMaster::init() {
     }
     #endif
 
+    // ADXL345_SPI_Test(*spi);
+    // while (true);
+
 
     /**
      * ON-BOARD DEVICE INITILIZATION
@@ -287,8 +376,8 @@ void msd::bms::BmsMaster::init() {
     static BQ34 fuel_gage_inst{i2c};
     static DEV::M24C32 eeprom_inst{0x50, *i2c};
     static DEV::BQ79631 hv_monitor_inst{*spi, 0x0, *uart};
-    static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
-    bridge = &bridge_inst;
+    // static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
+    // bridge = &bridge_inst;
     hv_monitor = &hv_monitor_inst;
     fuel_gauge = &fuel_gage_inst;
     eeprom = &eeprom_inst;
@@ -382,11 +471,9 @@ void msd::bms::BmsMaster::init() {
     }
     #endif
 
-    /**
-     * STACK DEVICE HANDSHAKE
-     * DAISY CHAIN: BQ79600 -> BQ79631 (HVM) -> BQ79161 (slave)
-     * need to add success/failure verification (shouldn't fail though)
-     */
+
+
+    // ------- wakeup sequence ---------- //
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
         uart->puts("=== BQ79600 INITIALIZATION ===\r\n");
@@ -394,98 +481,79 @@ void msd::bms::BmsMaster::init() {
     }
     #endif
 
+    // Initialize bridge device instance
+    static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
+    bridge = &bridge_inst;
 
-    // ------- wakeup sequence ---------- //
+    // Wake from GPIO
     gpiowake();
+    // bridge->wake();
 
-    // try to read something
-    uint8_t readback = 0;
-    bridge->singleRead(0x0, 0x2104, readback);
-
-    #ifdef BMS_DEBUG
-    if (uart_safe_mode) {
-        uart->printf("Readback value: 0x%X\r\n", readback);
-        uart->puts("---------------------------------------\r\n");
-    }
-    #endif
-
-    // hang here
-    while (true);
-
-
-    uint16_t id;
-    uint8_t ctrl1 = 0;
-
-
-    // ------- auto addressing ---------- //
-    constexpr uint8_t STACK_DEVICES = 2;
-
-    // After SEND_WAKE write
-    // core::time::wait(5);
-
-
-    // Write to CTRL1 register
-    bool write_ok = bridge->singleWrite(0x00, 0x0309, 0x20); // send wake
-
-    if (!write_ok) {
-        #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("ERROR: Write failed\r\n");
-        }
-        #endif
-        // state_ = BmsState::FAULT;
-        return;
-    }
-
-    core::time::wait(12*STACK_DEVICES);
-
-
-    // AUTO ADDRESSING
-    if (!bridge->autoAddressStack(STACK_DEVICES)) {
-        #ifdef BMS_DEBUG
-        uart->puts("ERROR: Auto-addressing failed\r\n");
-        #endif
-        // return;
-
-
-        bridge->autoAddressStack(STACK_DEVICES);
-    }
     core::time::wait(10);
 
-    bridge->initRegisters();
+    // Try all 4 SPI modes to find which one works
+    IO::SPI::SPIMode modes[] = {
+        IO::SPI::SPIMode::SPI_MODE0
+        // IO::SPI::SPIMode::SPI_MODE1,
+        // IO::SPI::SPIMode::SPI_MODE2,
+        // IO::SPI::SPIMode::SPI_MODE3
+    };
 
-    //--------------- ERROR POINT ------------------//
+    bool init_success = false;
+    for (int m = 0; m < 1; m++) {
+        uart->printf("\n=== Trying SPI MODE%d ===\r\n", m);
 
+        spi->configureSPI(SPI_SPEED_1MHZ, modes[m], SPI_MSB_FIRST);
+        core::time::wait(10);
+
+        // Simple read test - don't call init(), just try reading
+        uint8_t dev_conf = 0;
+        if (bridge->singleRead(0x00, 0x2001, dev_conf)) {
+            uart->printf("READ SUCCESS! DEV_CONF1 = 0x%02X\r\n", dev_conf);
+            if (dev_conf == 0x14) {
+                uart->printf("✓✓✓ CORRECT MODE FOUND: MODE%d ✓✓✓\r\n", m);
+                bridge->init();
+                init_success = true;
+                bq79600_present = true;
+                break;
+            }
+        }
+    }
+
+    if (!init_success) {
     #ifdef BMS_DEBUG
-    if (uart_safe_mode) {
-        uart->puts("  Write sent successfully\r\n");
-    }
+        if (uart_safe_mode) {
+            uart->puts("ERROR: Could not initialize BQ79600 with any SPI mode\r\n");
+            uart->puts("Check hardware connections:\r\n");
+            uart->puts("  1. MISO/MOSI/CLK/CS connections\r\n");
+            uart->puts("  2. BQ79600 power (DVDD, VIO)\r\n");
+            uart->puts("  3. SPI_SEL pin (must be LOW)\r\n");
+        }
     #endif
-
-    core::time::wait(10); // readback delay
-
-    // Read CTRL1 back to verify
-    if (bridge->singleRead(0x00, 0x0309, ctrl1)) {
-        #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->printf("BQ79600 OK CONTROL1: 0x%02X!\r\n", ctrl1);
-        }
-        #endif
-        bq79600_present = true;
-        warning_led.setState(core::io::GPIO::State::LOW);
-    } else {
-        #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->printf("WARNING: BQ79600 not responding (low-power / no stack power)\r\n"
-            "         Continuing without HV monitoring\r\n");
-        }
-        #endif
+        // Don't return - continue without BQ79600
         bq79600_present = false;
+    } else {
+        // Device is now in ACTIVE mode, proceed with stack addressing
+    #ifdef BMS_DEBUG
+        if (uart_safe_mode) {
+            uart->puts("\nDevice in ACTIVE mode - starting auto-addressing...\r\n");
+
+            constexpr uint8_t STACK_DEVICES = 2;
+            if (!bridge->autoAddressStack(STACK_DEVICES)) {
+                uart->puts("ERROR: Auto-addressing failed\r\n");
+    #endif
+            }
+        }
     }
+
+    core::time::wait(10);
+
+    // still try to init registers
+    bridge->initRegisters();
 
     // If BQ79600 found
     if (bq79600_present) {
-        id = 0;
+        uint16_t id = 0;
         if (bridge->readDeviceID(id)) {
             #ifdef BMS_DEBUG
                  if (uart_safe_mode) {
@@ -505,7 +573,6 @@ void msd::bms::BmsMaster::init() {
             // return;
         }
     }
-
 
 
     // add any device configurations here

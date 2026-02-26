@@ -51,6 +51,8 @@ public:
     /** Wake the device (send any I2C activity to wake) */
     bool wake();
 
+    bool init();
+
     bool ping();
 
     bool broadcastWrite(uint16_t reg, uint8_t val);
