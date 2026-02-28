@@ -72,20 +72,9 @@ void ThermistorArray::update() {
         readings_[i].fault = detectFault(readings_[i].adc_raw);
         readings_[i].temperature_dC = thermistorBetaTemp(readings_[i].adc_raw, 3.3f, 4095, 10000.0f);
     }
-    //     uint32_t adc = adcs_[i]->read();
-    //
-    //     Fault fault = detectFault(adc);
-    //     readings_[i].fault = fault;
-    //
-    //     if (fault != Fault::NONE) {
-    //         readings_[i].temperature_dC = 0;
-    //         continue;
-    //     }
-    //
-    //     float v = adcToVoltage(adc);
-    //     float r = voltageToResistance(v);
-    //     readings_[i].temperature_dC = resistanceToTemperature(r, i);
-    // }
+
+    // CHECK FOR TEMPERATURE FAULTS!
+
 }
 
 // ======================

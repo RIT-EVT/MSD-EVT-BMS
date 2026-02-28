@@ -19,6 +19,7 @@
  * Date: October 2025
  */
 
+
 #include "Thermistor.hpp"
 // #include "core/dev/Thermistor.hpp"
 #include "core/dev/RTCTimer.hpp"
@@ -58,7 +59,7 @@ public:
     BmsMaster(BmsMaster&&) = delete;
     BmsMaster& operator=(BmsMaster&&) = delete;
 
-    void gpiowake();
+    void gpiowake() const;
 
     /**
      * @brief Initialize the BMS master.
@@ -76,7 +77,7 @@ public:
      */
     void update();
 
-    void delay_us(uint32_t us);
+    void delay_us(uint32_t us) const;
 
     /**
      * @brief Shutdown the BMS master.
