@@ -67,7 +67,9 @@ core::io::GPIO& mosi_gpio = core::io::getGPIO<core::io::Pin::PC_12>();
 
 // helper vars
 static bool bq79600_present = false;
+static bool bq79631_present = false;
 static bool init_success = false;
+constexpr uint8_t STACK_DEVICES = 0;
 
 
 // BMS instance
@@ -93,7 +95,6 @@ void toggle_can(const bool standby) {
     else {
         can_gpio.writePin(IO::GPIO::State::LOW);
     }
-
 }
 
 void msd::bms::BmsMaster::gpiowake() const
@@ -129,9 +130,6 @@ void msd::bms::BmsMaster::gpiowake() const
     GPIOC->MODER |= GPIO_MODER_MODE12_0;       // Set as output
     GPIOA->MODER &= ~GPIO_MODER_MODE15;        // Clear CS (PA15)
     GPIOA->MODER |= GPIO_MODER_MODE15_0;       // Set as output
-
-    // create a pwm signal to simulate a clk signal during wakeup
-
 
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
@@ -193,10 +191,10 @@ void msd::bms::BmsMaster::init() {
 
     // ALL leds are set high upon initialization (POST test)
     // each led turns off as post completes
-    status_led.setState(core::io::GPIO::State::HIGH);
-    warning_led.setState(core::io::GPIO::State::HIGH);
-    error_led.setState(core::io::GPIO::State::HIGH);
     extra_led.setState(core::io::GPIO::State::HIGH);
+    error_led.setState(core::io::GPIO::State::HIGH);
+    warning_led.setState(core::io::GPIO::State::HIGH);
+    status_led.setState(core::io::GPIO::State::HIGH);
 
     // Set initial state for GPIO PINS
     dia_en_gpio.writePin(core::io::GPIO::State::LOW);
@@ -353,7 +351,7 @@ void msd::bms::BmsMaster::init() {
         uart->puts("EEPROM passed integrity check!\r\n");
     }
     #endif
-    error_led.setState(core::io::GPIO::State::LOW); // device detection complete
+    error_led.setState(core::io::GPIO::State::LOW); // MASTER device detection complete
 
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
@@ -383,7 +381,6 @@ void msd::bms::BmsMaster::init() {
 
     // Wake from GPIO
     gpiowake();
-    // bridge->wake(); // waking with spi gpio works so this one isn't needed
 
     core::time::wait(10);
 
@@ -391,9 +388,9 @@ void msd::bms::BmsMaster::init() {
     uint8_t dev_conf = 0;
     if (bridge->singleRead(0x00, 0x2001, dev_conf)) {
         #ifdef BMS_DEBUG
-            if (uart_safe_mode) {
-                uart->printf("READ SUCCESS! DEV_CONF1 = 0x%02X\r\n", dev_conf);
-            }
+        if (uart_safe_mode) {
+            uart->printf("READ SUCCESS! DEV_CONF1 = 0x%02X\r\n", dev_conf);
+        }
         #endif
         if (dev_conf == 0x14) {
             bridge->init(); // call init
@@ -404,89 +401,124 @@ void msd::bms::BmsMaster::init() {
     }
 
     if (!init_success) {
-    #ifdef BMS_DEBUG
+        #ifdef BMS_DEBUG
         if (uart_safe_mode) {
             uart->puts("ERROR: Could not initialize BQ79600 with any SPI mode\r\n");
         }
-    #endif
+        #endif
         // shouldn't get here
         bq79600_present = false;
     } else {
         uint8_t val = 0;
         #ifdef BMS_DEBUG
-            if (uart_safe_mode) {
-                uart->puts("Test 1: Read bridge device...\r\n");
-            }
+        if (uart_safe_mode) {
+            uart->puts("Test 1: Read bridge device...\r\n");
+        }
         #endif
         if (bridge->singleRead(0x00, 0x2001, val)) {
             #ifdef BMS_DEBUG
-                if (uart_safe_mode) {
-                    uart->printf("  SUCCESS: Bridge DEV_CONF1 = 0x%02X\r\n", val);
-                }
+            if (uart_safe_mode) {
+                uart->printf("  SUCCESS: Bridge DEV_CONF1 = 0x%02X\r\n", val);
+            }
             #endif
             state_ = BmsState::NORMAL;
         } else {
             #ifdef BMS_DEBUG
-                if (uart_safe_mode) {
-                    uart->puts("  FAIL: Bridge not responding\r\n");
-                }
+            if (uart_safe_mode) {
+                uart->puts("  FAIL: Bridge not responding\r\n");
+            }
             #endif
             state_ = BmsState::FAULT;
         }
+    }
 
-        // Device is now in ACTIVE mode, proceed with stack addressing
-        #ifdef BMS_DEBUG
-            if (uart_safe_mode) {
-                uart->puts("Starting auto-addressing...\r\n");
-            }
-        #endif
-
-            constexpr uint8_t STACK_DEVICES = 1;
-            core::time::wait(12 * STACK_DEVICES);
-
-            if (!bridge->autoAddressStack(STACK_DEVICES)) {
-                #ifdef BMS_DEBUG
-                    if (uart_safe_mode) {
-                        uart->puts("ERROR: Auto-addressing failed\r\n");
-                    }
-                #endif
-                // state_ = BmsState::FAULT;
-            } else {
-                #ifdef BMS_DEBUG
-                    if (uart_safe_mode) {
-                        uart->puts("Auto-addressing Success!\r\n");
-                        uart->puts("Initializing registers...\r\n");
-                    }
-                #endif
-                if (!bridge->initRegisters()) {
-                    #ifdef BMS_DEBUG
-                        if (uart_safe_mode) {
-                            uart->puts("ERROR: Register Init failed\r\n");
-                        }
-                    #endif
-                    // state_ = BmsState::FAULT;
-                }
-                #ifdef BMS_DEBUG
-                    if (uart_safe_mode) {
-                        uart->puts("Register Init Success!\r\n");
-                    }
-                #endif
-            }
-        }
-
+    warning_led.setState(core::io::GPIO::State::LOW); // bridge detection complete
 
     // check HVM through bridge
     #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("Checking HVM...\r\n");
-        }
+    if (uart_safe_mode) {
+        uart->puts("Checking HVM...\r\n");
+    }
     #endif
-    // check main slave through bridge
+
+    // re-send wake first
+    bridge->broadcastWrite(0x309, 0x20);
+
     #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("Checking Slave board...\r\n");
-        }
+    uart->puts("Checking HVM device...\r\n");
     #endif
+
+    uint8_t hvm_id_high = 0;
+    uint8_t hvm_id_low  = 0;
+
+    bool hvm_ok = true;
+
+    if (!bridge->singleRead(0x00, 0x0500, hvm_id_high))
+        hvm_ok = false;
+
+    if (!bridge->singleRead(0x00, 0x0501, hvm_id_low))
+        hvm_ok = false;
+
+    uint16_t hvm_id = (hvm_id_high << 8) | hvm_id_low;
+
+    #ifdef BMS_DEBUG
+    uart->printf("HVM ID = 0x%04X %s\r\n",
+                 hvm_id,
+                 hvm_ok ? "✓" : "READ FAIL");
+    #endif
+
+    uint8_t address = 0;
+    bridge->singleWrite(0x00, 0x0309, 0x01); // must be set to change HVM address
+    bridge->singleWrite(0x00, 0x0307, 0x01); // change HVM address
+    bridge->singleRead(0x00, 0x0307, address); // read address
+    bridge->singleWrite(0x00, 0x0309, 0x00);
+
+    // check main slave through bridge
+
+    // auto-addressing only works when slaves connected!
+    if constexpr (STACK_DEVICES > 0){
+        // Device is now in ACTIVE mode, proceed with stack addressing
+        #ifdef BMS_DEBUG
+        if (uart_safe_mode) {
+            uart->puts("Starting auto-addressing for slaves\r\n");
+        }
+        #endif
+
+        core::time::wait(12 * STACK_DEVICES);
+        #ifdef BMS_DEBUG
+            if (uart_safe_mode) {
+                uart->puts("Checking Slave board...\r\n");
+            }
+        #endif
+        if (!bridge->autoAddressStack(STACK_DEVICES)) {
+            #ifdef BMS_DEBUG
+                if (uart_safe_mode) {
+                    uart->puts("ERROR: Auto-addressing failed\r\n");
+                }
+            #endif
+            // state_ = BmsState::FAULT;
+        } else {
+            #ifdef BMS_DEBUG
+                if (uart_safe_mode) {
+                    uart->puts("Auto-addressing Success!\r\n");
+                    uart->puts("Initializing registers...\r\n");
+                }
+            #endif
+            if (!bridge->initRegisters()) {
+                #ifdef BMS_DEBUG
+                    if (uart_safe_mode) {
+                        uart->puts("ERROR: Register Init failed\r\n");
+                    }
+                #endif
+                // state_ = BmsState::FAULT;
+            }
+            #ifdef BMS_DEBUG
+                if (uart_safe_mode) {
+                    uart->puts("Register Init Success!\r\n");
+                }
+            #endif
+        }
+    }
 
 
     status_led.setState(core::io::GPIO::State::LOW); // device configuration complete
@@ -535,17 +567,28 @@ void msd::bms::BmsMaster::update() {
 }
 
 void msd::bms::BmsMaster::update_measurements() {
+    // main slave updates first
+    // will implement after daisy chain fixed
+
     // measurement updates bq34
-    if (!(fuel_gauge->getVoltage(bq34_voltage_) &&
-      fuel_gauge->getTemperature(bq34_temperature_) &&
-      fuel_gauge->getCurrent(bq34_current_) &&
-      fuel_gauge->getSOC(bq34_soc_) &&
-      fuel_gauge->getMaxError(bq34_max_error_) &&
-      fuel_gauge->getVoltageRaw(bq34_voltage_raw_) &&
-      fuel_gauge->getFlags(bq34_flags_))) {
+    bool v = fuel_gauge->getVoltage(bq34_voltage_);
+    bool t = fuel_gauge->getTemperature(bq34_temperature_);
+    bool c = fuel_gauge->getCurrent(bq34_current_);
+    bool s = fuel_gauge->getSOC(bq34_soc_);
+    bool e = fuel_gauge->getMaxError(bq34_max_error_);
+    bool r = fuel_gauge->getVoltageRaw(bq34_voltage_raw_);
+    bool f = fuel_gauge->getFlags(bq34_flags_);
+    if (!(v && t && c && s && e && r && f)) {
         #ifdef BMS_DEBUG
             if (uart_safe_mode) {
-                uart->puts("BQ34 read error (one or more values invalid)\r\n");
+                uart->puts("BQ34 read error:\r\n");
+                if (!v) uart->printf("\tvoltage read error");
+                if (!t) uart->printf("\ttemperature read error");
+                if (!c) uart->printf("\tcurrent read error");
+                if (!s) uart->printf("\tsoc read error");
+                if (!e) uart->printf("\tmax error read error");
+                if (!r) uart->printf("\traw voltage read error");
+                if (!f) uart->printf("\terror flags read error");
             }
         #endif
         state_ = BmsState::FAULT;
@@ -564,7 +607,7 @@ void msd::bms::BmsMaster::update_measurements() {
                     uart->printf("Max Error: %d \r\n", bq34_max_error_);
                     uart->printf("Voltage (raw): %d mV\r\n", bq34_voltage_raw_);
 
-                    uart->printf("\tFlags: 0x%X:\r\n", bq34_flags_);
+                    uart->printf("Flags: 0x%X:\r\n", bq34_flags_);
 
                     // Decode common flag bits
                     if (bq34_flags_ & 0x0100) uart->printf("\t- CHG (Charging Allowed)\r\n");
@@ -587,8 +630,8 @@ void msd::bms::BmsMaster::update_measurements() {
       }
 
 
-    // other measurements
-    if (bq79600_present) {
+    // HVM Readings
+    if (bq79631_present) {
         if (!(hv_monitor->getPackVoltage_mV(pack_voltage_mV_) &&
           hv_monitor->getDieTemperature_cC(die_temp_cC_) &&
           hv_monitor->getFaultFlags(fault_flags_) &&
@@ -627,14 +670,14 @@ void msd::bms::BmsMaster::update_measurements() {
 
             #ifdef BMS_DEBUG
                 for (uint8_t i = 0; i < 2; i++) {
-                    auto r = thermistors_->getSensor(i);
+                    auto [adc_raw, temperature_dC, fault] = thermistors_->getSensor(i);
                         if (uart_safe_mode) {
                             uart->printf("Raw ADC Value: %d   TH-%d: %d.%d C   Fault=%d\r\n",
-                                         r.adc_raw,
+                                         adc_raw,
                                          i,
-                                         r.temperature_dC,
-                                         abs(r.temperature_dC % 10),
-                                         static_cast<uint8_t>(r.fault));
+                                         temperature_dC,
+                                         abs(temperature_dC % 10),
+                                         static_cast<uint8_t>(fault));
                         }
                 }
             #endif
