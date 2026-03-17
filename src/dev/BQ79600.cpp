@@ -6,7 +6,7 @@
 #include "dev/BQ79600.hpp"
 
 #define BMS_DEBUG // MUST BE DEFINED IN BMS.CPP
-// #define MESSAGE_DEBUG
+#define MESSAGE_DEBUG
 
 namespace {
 // Existing registers
@@ -42,29 +42,24 @@ BQ79600::BQ79600(io::SPI& spi, const uint8_t spi_device, io::UART& uart)
  *
  * "dev" only used for single read/writes
  **/
-bool BQ79600::broadcastWrite(uint16_t reg, uint8_t val)
-{
-    return writeReg16(0x0, reg, val, false, true);
+void BQ79600::broadcastWrite(uint16_t reg, uint8_t val) const {
+    writeReg16(0x0, reg, val, false, true);
 }
 
-bool BQ79600::stackRead(uint8_t dev, uint16_t reg, uint8_t& val)
-{
+bool BQ79600::stackRead(uint16_t reg, uint8_t& val) const {
     return readReg16(0x0, reg, val, true);
 }
 
-bool BQ79600::stackWrite(uint16_t reg, uint8_t val)
-{
-    return writeReg16(0x0, reg, val, true, false);
+void BQ79600::stackWrite(uint16_t reg, uint8_t val) const {
+    writeReg16(0x0, reg, val, true, false);
 }
 
-bool BQ79600::singleRead(uint8_t dev, uint16_t reg, uint8_t& val)
-{
+bool BQ79600::singleRead(uint8_t dev, uint16_t reg, uint8_t& val) const {
     return readReg16(dev, reg, val, false);
 }
 
-bool BQ79600::singleWrite(uint8_t dev, uint16_t reg, uint8_t val)
-{
-    return writeReg16(dev, reg, val, false, false);
+void BQ79600::singleWrite(uint8_t dev, uint16_t reg, uint8_t val) const {
+    writeReg16(dev, reg, val, false, false);
 }
 
 /* Initialization sequence
@@ -101,23 +96,10 @@ bool BQ79600::init() {
         uart_.puts("Configuring CONTROL1...\r\n");
     #endif
 
-    if (!singleWrite(0x00, REG_CONTROL1, 0x21)) {
-        #ifdef BMS_DEBUG
-                uart_.puts("ERROR: CONTROL1 write failed\r\n");
-        #endif
-        return false;
-    }
+    singleWrite(0x00, REG_CONTROL1, 0x20);
 
     core::time::wait(10);
 
-    // CONTROL1 is a self clearing bit, will always read back 0x0
-    // // Verify CONTROL1 write
-    // uint8_t ctrl1_verify = 0;
-    // singleRead(0x00, REG_CONTROL1, ctrl1_verify);
-    //
-    // #ifdef BMS_DEBUG
-    //     uart_.printf("  CONTROL1 = 0x%02X (expect 0x20) %s\r\n", ctrl1_verify, ctrl1_verify == 0x20 ? "✓" : "✗");
-    // #endif
 
     // Disable communication timeout
     // Prevents auto-sleep due to communication gaps
@@ -191,14 +173,13 @@ uint16_t BQ79600::crc16(const uint8_t* data, uint8_t len) {
 }
 
 /*
- * Autoaddressing sequence for the BQ79600
+ * Auto-addressing sequence for the BQ79600
  * steps are carefully commented throughout the function
  **/
-bool BQ79600::autoAddressStack(uint8_t expected_devices)
-{
+void BQ79600::autoAddressStack(uint8_t expected_devices) const {
 
     #ifdef BMS_DEBUG
-        uart_.puts("=== BQ79600 AUTO-ADDRESS START ===\r\n");
+        uart_.puts("=== AUTO-ADDRESS START ===\r\n");
     #endif
 
 
@@ -210,30 +191,18 @@ bool BQ79600::autoAddressStack(uint8_t expected_devices)
     #endif
     for (uint8_t i = 0; i < OTP_ECC_COUNT; i++) {
         stackWrite(REG_OTP_ECC_BASE + i, 0x00);
-        core::time::wait(5);
+        // core::time::wait(2);
     }
 
     // ------------------------------------------------------------
-    // Step 1: Enable auto-addressing
-    // bit[5] = SEND_WAKE  = 1 → enable wake propagation to stack
+    // Step 2: Enable auto-addressing
     // bit[0] = ADDR_WR  = 1 → enables auto-addressing
     // ------------------------------------------------------------
     #ifdef BMS_DEBUG
         uart_.puts("Step 2: Enable auto-addressing...\r\n");
     #endif
-    broadcastWrite(REG_CONTROL1, 0x21);
-    // singleWrite(0x0, REG_CONTROL1, 0x21);
-
-    // core::time::wait(5);
-
-    // uint8_t verify = 0;
-    // singleRead(0x00, REG_CONTROL1, verify);
-    // #ifdef BMS_DEBUG
-    // uart_.printf("CONTROL1   = 0x%02X (expect 0x21) %s\r\n",
-    //              verify, verify == 0x21 ? "OK" : "FAIL");
-    // #endif
-
-    core::time::wait(10);
+    broadcastWrite(REG_CONTROL1, 0x01);
+    core::time::wait(2);
 
     // ------------------------------------------------------------
     // Step 3: Assign addresses via DIR0_ADDR
@@ -249,86 +218,57 @@ bool BQ79600::autoAddressStack(uint8_t expected_devices)
         uart_.printf("\tAssigned address %u\r\n", addr);
     #endif
 
-        core::time::wait(5);
+        core::time::wait(2);
     }
+
+    // EXIT auto-address mode
+    broadcastWrite(REG_CONTROL1, 0x00);
+    core::time::wait(2);
+
+    // core::time::wait(10);
 
     // ------------------------------------------------------------
     // Step 4: broadcast write 0x02 to comm_ctrl register
     // ------------------------------------------------------------
-    // #ifdef BMS_DEBUG
-    //     uart_.puts("Step 4: Configure all as stack devices...\r\n");
-    // #endif
-    // broadcastWrite(REG_COMM_CTRL, 0x02);
-    //
-    // core::time::wait(5);
+    #ifdef BMS_DEBUG
+        uart_.puts("Step 4: Configure all as stack devices...\r\n");
+    #endif
+    broadcastWrite(REG_COMM_CTRL, 0x02);
+
+    core::time::wait(2);
 
     // ------------------------------------------------------------
     // Step 5: Single write 0x3 to comm control register to top device
     // ------------------------------------------------------------
-    // #ifdef BMS_DEBUG
-    //     uart_.printf("Step 5: Mark device %u as top of stack...\r\n", expected_devices - 1);
-    // #endif
-    // singleWrite(0x1, REG_COMM_CTRL, 0x00);
-    //
-    // core::time::wait(5);
+    #ifdef BMS_DEBUG
+        uart_.printf("Step 5: Mark device %u as top of stack...\r\n", expected_devices-1);
+    #endif
+    singleWrite(expected_devices-1, REG_COMM_CTRL, 0x03);
+
+    // core::time::wait(10);
 
     // ------------------------------------------------------------
     // Step 6: Dummy stack reads (DLL sync)
     // ------------------------------------------------------------
-    // #ifdef BMS_DEBUG
-    //     uart_.puts("Step 6: DLL sync (dummy stack reads)...\r\n");
-    // #endif
-    //
-    // for (uint8_t i = 0; i < OTP_ECC_COUNT; i++) {
-    //     uint8_t dummy = 0;
-    //     stackRead(0x00, REG_OTP_ECC_BASE + i, dummy);
-    //
-    //     core::time::wait(5);
-    // }
-
-    // ------------------------------------------------------------
-    // Step 7: Stack read DIR0_ADDR
-    // ------------------------------------------------------------
     #ifdef BMS_DEBUG
-        uart_.puts("Step 7: Verifying addresses...\r\n");
+        uart_.puts("Step 6: DLL sync (dummy stack reads)...\r\n");
     #endif
 
-    uint8_t readback = 0;
-    if (stackRead(0x00, REG_DIR0_ADDR, readback)) {
-        #ifdef BMS_DEBUG
-            uart_.printf("Device 0 reports address: 0x%02X ✓\r\n", readback);
-        #endif
-    } else {
-        #ifdef BMS_DEBUG
-            uart_.puts("ERROR: DIR0_ADDR readback failed\r\n");
-        #endif
-        return false;
+    for (uint8_t i = 0; i < OTP_ECC_COUNT; i++) {
+        uint8_t dummy = 0;
+        stackRead(REG_OTP_ECC_BASE + i, dummy);
+
+        core::time::wait(2);
     }
 
-    core::time::wait(5);
+    broadcastWrite(REG_CONTROL1, 0x00); // SPI_ACTIVE
+    core::time::wait(2);
 
-    // ------------------------------------------------------------
-    // Step 8: Verify base device configuration
-    // DEV_CONF1 must be 0x14
-    // ------------------------------------------------------------
-    #ifdef BMS_DEBUG
-        uart_.puts("Step 8: Verifying bridge...\r\n");
-    #endif
-
-    uint8_t dev_conf = 0;
-    bool verify = singleRead(0x00, REG_DEV_CONF1, dev_conf);
-    if (!verify || dev_conf != 0x14) {
-        #ifdef BMS_DEBUG
-            uart_.printf("ERROR: Bridge verification failed (0x%02X)\r\n", dev_conf);
-        #endif
-        return false;
-    }
 
     #ifdef BMS_DEBUG
         uart_.puts("=== AUTO-ADDRESS COMPLETE ===\r\n\n");
     #endif
 
-    return true;
 }
 
 /*
@@ -345,18 +285,10 @@ bool BQ79600::initRegisters()
     // bit[5] = SEND_WAKE  = 1 → enable wake propagation to stack
     // bit[0] = ADDR_WR  = 1 → enables auto-addressing
     // ============================================================
-    if (!singleWrite(0x00, REG_CONTROL1, 0x21)) {
-        #ifdef BMS_DEBUG
-            uart_.puts("ERROR: CONTROL1 write failed\r\n");
-        #endif
-        return false;
-    }
+    singleWrite(0x00, REG_CONTROL1, 0x20);
 
-    uint8_t verify = 0;
-    singleRead(0x00, REG_CONTROL1, verify);
     #ifdef BMS_DEBUG
-        uart_.printf("CONTROL1   = 0x%02X (expect 0x01) %s\r\n",
-                     verify, verify == 0x21 ? "OK" : "FAIL");
+        uart_.printf("CONTROL1 write issued (self clearing)\r\n");
     #endif
 
     core::time::wait(1);
@@ -365,12 +297,8 @@ bool BQ79600::initRegisters()
     // COMM_CTRL (0x0308)
     // 0x00 = bridge device role (not stack, not top of stack)
     // ============================================================
-    if (!singleWrite(0x00, REG_COMM_CTRL, 0x00)) {
-        #ifdef BMS_DEBUG
-            uart_.puts("ERROR: COMM_CTRL write failed\r\n");
-        #endif
-        return false;
-    }
+    uint8_t verify = 0;
+    singleWrite(0x00, REG_COMM_CTRL, 0x00);
 
     singleRead(0x00, REG_COMM_CTRL, verify);
     #ifdef BMS_DEBUG
@@ -447,7 +375,7 @@ bool BQ79600::readDeviceID(uint16_t& id) {
  *  stack - [B0] [REG (HI)] [REG(LO)] [DATA] [CRC LSB] [CRC MSB]
  *  single - [90] [DEV] [REG (HI)] [REG(LO)] [DATA] [CRC LSB] [CRC MSB]
  **/
-bool BQ79600::writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, bool broadcast) const {
+void BQ79600::writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, bool broadcast) const {
     uint8_t frame[7];
     uint8_t frame_len;
 
@@ -495,14 +423,11 @@ bool BQ79600::writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, boo
     uart_.printf("\r\n");
     #endif
 
-    if (!spi_.startTransmission(device_))
-        return false;
+    spi_.startTransmission(device_);
 
-    bool success = (spi_.write(frame, frame_len) == core::io::SPI::SPIStatus::OK);
+    spi_.write(frame, frame_len);
 
     spi_.endTransmission(device_);
-
-    return success;
 }
 
 /*

@@ -28,13 +28,13 @@ public:
 
     bool init();
 
-    bool broadcastWrite(uint16_t reg, uint8_t val);
-    bool stackWrite(uint16_t reg, uint8_t val);
-    bool singleWrite(uint8_t dev, uint16_t reg, uint8_t val);
-    bool singleRead(uint8_t dev, uint16_t reg, uint8_t& val);
-    bool stackRead(uint8_t dev, uint16_t reg, uint8_t& val);
+    void broadcastWrite(uint16_t reg, uint8_t val) const;
+    void stackWrite(uint16_t reg, uint8_t val) const;
+    void singleWrite(uint8_t dev, uint16_t reg, uint8_t val) const;
+    bool singleRead(uint8_t dev, uint16_t reg, uint8_t& val) const;
+    bool stackRead(uint16_t reg, uint8_t& val) const;
 
-    bool autoAddressStack(uint8_t expected_devices);
+    void autoAddressStack(uint8_t expected_devices) const;
 
     bool initRegisters();
 
@@ -45,7 +45,7 @@ private:
 
     static uint16_t crc16(const uint8_t* data, uint8_t len);
 
-    bool writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, bool broadcast) const;
+    void writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, bool broadcast) const;
 
     bool readReg16(uint8_t dev, uint16_t reg, uint8_t& val, bool stack) const;
 
