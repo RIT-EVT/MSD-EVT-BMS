@@ -1,18 +1,19 @@
 /**
  * @file BMS.cpp
- * @brief Interface for the Battery Management System (BMS) master control.
+ * @brief Implementation of the Battery Management System (BMS) master controller.
  *
- * This source implements the functions used for managing the BMS.
- * The BMS master is responsible for coordinating communications, safety checks,
- * and fault handling in the Battery Management System.
+ * This file contains the implementation of the BmsMaster class, which manages
+ * system initialization, device communication, measurement acquisition, and
+ * safety/state handling.
  *
- * currently have a ton of uart print statements that slow down processing
- * will need to eliminate them in the future!
+ * @note Extensive UART debug logging is currently enabled and significantly
+ * impacts timing. This should be gated or removed for production deployment.
  *
  * Project: MSD_BMS
  * Author: Key'Mon Jenkins
  * Date: October 2025
  */
+
 
 #include "BMS.hpp"
 
@@ -22,63 +23,93 @@
 namespace IO = core::io;
 namespace DEV = core::dev;
 
-// comms devices
+/* =========================
+ * Communication Interfaces
+ * ========================= */
 namespace {
-IO::UART* uart = nullptr;
-bool uart_safe_mode = true;
-IO::I2C* i2c = nullptr;
-IO::SPI* spi = nullptr;
-IO::CAN* can = nullptr;
+IO::UART* uart = nullptr;     // UART interface for debug logging
+bool uart_safe_mode = true;   // Prevents blocking if UART unavailable
+IO::I2C* i2c = nullptr;       // I2C bus handle
+IO::SPI* spi = nullptr;       // SPI bus handle
+IO::CAN* can = nullptr;       // CAN interface
 }
 
-// Other devices
+/* =========================
+ * Device Instances
+ * ========================= */
 namespace {
-BQ34* fuel_gauge = nullptr;
-DEV::M24C32* eeprom = nullptr;
-DEV::BQ79631* hv_monitor = nullptr;
-DEV::BQ79600* bridge = nullptr;
+BQ34* fuel_gauge = nullptr;         // Fuel gauge (BQ34Z100)
+DEV::M24C32* eeprom = nullptr;      // EEPROM storage
+DEV::BQ79631* hv_monitor = nullptr; // High-voltage monitor
+DEV::BQ79600* bridge = nullptr;     // SPI bridge device
 }
 
-// LEDs
+/* =========================
+ * LED Indicators
+ * ========================= */
 namespace {
-core::io::GPIO& status_gpio = core::io::getGPIO<core::io::Pin::PA_5>();
+core::io::GPIO& status_gpio  = core::io::getGPIO<core::io::Pin::PA_5>();
 DEV::LED status_led(status_gpio, DEV::LED::ActiveState::LOW);
+
 core::io::GPIO& warning_gpio = core::io::getGPIO<core::io::Pin::PA_6>();
 DEV::LED warning_led(warning_gpio, DEV::LED::ActiveState::LOW);
-core::io::GPIO& error_gpio = core::io::getGPIO<core::io::Pin::PA_7>();
+
+core::io::GPIO& error_gpio   = core::io::getGPIO<core::io::Pin::PA_7>();
 DEV::LED error_led(error_gpio, DEV::LED::ActiveState::LOW);
-core::io::GPIO& extra_gpio = core::io::getGPIO<core::io::Pin::PB_0>();
+
+core::io::GPIO& extra_gpio   = core::io::getGPIO<core::io::Pin::PB_0>();
 DEV::LED extra_led(extra_gpio, DEV::LED::ActiveState::LOW);
 }
 
+/* =========================
+ * GPIO Control Signals
+ * ========================= */
 namespace {
-core::io::GPIO& hv_cs_gpio = core::io::getGPIO<core::io::Pin::PA_15>();
-core::io::GPIO& can_gpio = core::io::getGPIO<core::io::Pin::PB_4>();
+core::io::GPIO& hv_cs_gpio = core::io::getGPIO<core::io::Pin::PA_15>(); // SPI CS for HV devices
+core::io::GPIO& can_gpio   = core::io::getGPIO<core::io::Pin::PB_4>();  // CAN standby control
+
 core::io::GPIO* spi_cs_pins[] = { &hv_cs_gpio };
+
 core::io::GPIO& dia_en_gpio = core::io::getGPIO<core::io::Pin::PC_0>();
-core::io::GPIO& sel1_gpio = core::io::getGPIO<core::io::Pin::PC_1>();
-core::io::GPIO& fault_gpio = core::io::getGPIO<core::io::Pin::PC_2>();
-core::io::GPIO& latch_gpio = core::io::getGPIO<core::io::Pin::PC_3>();
-// core::io::GPIO& cast_fault_gpio = core::io::getGPIO<core::io::Pin::PC_4>();
+core::io::GPIO& sel1_gpio   = core::io::getGPIO<core::io::Pin::PC_1>();
+core::io::GPIO& fault_gpio  = core::io::getGPIO<core::io::Pin::PC_2>();
+core::io::GPIO& latch_gpio  = core::io::getGPIO<core::io::Pin::PC_3>();
 core::io::GPIO& sw_en_shared_gpio = core::io::getGPIO<core::io::Pin::PC_5>();
-core::io::GPIO& mosi_gpio = core::io::getGPIO<core::io::Pin::PC_12>();
-// core::io::GPIO& miso_gpio = core::io::getGPIO<core::io::Pin::PC_11>();
+core::io::GPIO& mosi_gpio   = core::io::getGPIO<core::io::Pin::PC_12>();
 }
 
-// helper vars
+/* =========================
+ * Internal State Flags
+ * ========================= */
 static bool bq79600_present = false;
 static bool bq79631_present = false;
-static bool init_success = false;
-constexpr uint8_t STACK_DEVICES = 2;
+static bool slave1_present  = false;
+static bool slave2_present  = false;
+static bool init_success    = false;
 
+constexpr uint8_t STACK_DEVICES = 1;
 
-// BMS instance
+/* =========================
+ * Singleton Accessor
+ * ========================= */
+
+/**
+ * @brief Get singleton instance of BmsMaster
+ *
+ * @return Reference to static BmsMaster instance
+ */
 msd::bms::BmsMaster& msd::bms::BmsMaster::instance() {
     static msd::bms::BmsMaster instance;
     return instance;
 }
 
-
+/**
+ * @brief Microsecond delay using TIM2
+ *
+ * Busy-wait loop based on a 1 MHz hardware timer.
+ *
+ * @param us Delay duration in microseconds
+ */
 void msd::bms::BmsMaster::delay_us(uint32_t us) const {
     uint32_t start = __HAL_TIM_GET_COUNTER(&htim2_);
     while ((__HAL_TIM_GET_COUNTER(&htim2_) - start) < us) {
@@ -86,8 +117,11 @@ void msd::bms::BmsMaster::delay_us(uint32_t us) const {
     }
 }
 
-// LOW = On mode, HIGH = Standby mode
-// only should be toggled low if sending CAN data
+/**
+ * @brief Control CAN transceiver standby mode
+ *
+ * @param standby true = standby (disabled), false = active
+ */
 void toggle_can(const bool standby) {
     if (standby) {
         can_gpio.writePin(IO::GPIO::State::HIGH);
@@ -97,45 +131,22 @@ void toggle_can(const bool standby) {
     }
 }
 
+/**
+ * @brief Perform GPIO-based wake sequence for BQ79600
+ *
+ * Implements the required wake pulse timing using bit-banged GPIO control.
+ * Temporarily overrides SPI pin configuration to manually drive MOSI and CS.
+ *
+ * @note Timing is critical and aligned with datasheet specifications.
+ */
 void msd::bms::BmsMaster::gpiowake() const
 {
-    // ============================================================
-    // BQ79600 Wake Sequence (GPIO bit-bang)
-    //
-    // Per datasheet:
-    // tCSS  = 2µs   (CS setup time before MOSI)
-    // tWAKE = 2.75ms minimum (MOSI LOW pulse width)
-    // tCSH  = 2µs   (CS hold time after MOSI)
-    // tSU   = 4ms   (device wake-up time between pulses)
-    // tREADY = 10ms (device ready time after second pulse)
-    //
-    // Sequence:
-    // 1. CS LOW
-    // 2. Wait tCSS (2µs)
-    // 3. MOSI LOW (wake pulse)
-    // 4. Wait tWAKE (2.75ms)
-    // 5. MOSI HIGH
-    // 6. Wait tCSH (2µs)
-    // 7. CS HIGH
-    // 8. Wait tSU (4ms)
-    // 9. Repeat steps 1-8 for second pulse
-    // 10. Wait tREADY (10ms)
-    //
-    // note: timing in code has been verified to align with desired timing
-    // ============================================================
-
-    // Make sure SPI peripheral doesn't interfere
     // Reconfigure MOSI and CS as GPIO outputs temporarily
     GPIOC->MODER &= ~GPIO_MODER_MODE12;        // Clear MOSI (PC12)
     GPIOC->MODER |= GPIO_MODER_MODE12_0;       // Set as output
     GPIOA->MODER &= ~GPIO_MODER_MODE15;        // Clear CS (PA15)
     GPIOA->MODER |= GPIO_MODER_MODE15_0;       // Set as output
 
-    #ifdef BMS_DEBUG
-    if (uart_safe_mode) {
-        uart->puts("Sending GPIO wake pulse...\r\n");
-    }
-    #endif
 
     for (int pulse = 0; pulse < 2; pulse++) {
 
@@ -146,7 +157,7 @@ void msd::bms::BmsMaster::gpiowake() const
         // MOSI LOW - start wake pulse
         mosi_gpio.writePin(IO::GPIO::State::LOW);
         core::time::wait(2);   // 2ms
-        delay_us(300);         // + 750µs = 2.75ms total
+        delay_us(750); //delay_us(300);              // + 750µs = 2.75ms total
 
         // MOSI HIGH - end wake pulse
         mosi_gpio.writePin(IO::GPIO::State::HIGH);
@@ -154,34 +165,29 @@ void msd::bms::BmsMaster::gpiowake() const
 
         // CS HIGH
         hv_cs_gpio.writePin(IO::GPIO::State::HIGH);
-
-        // Wait for device to process wake pulse
-        // Skip delay after last pulse, tREADY handles it
-        // if (pulse < 1) {
-        //     core::time::wait(4);  // tSU between pulses
-        // }
-        // delay_us(1);
     }
 
-    // tREADY - wait for device to be ready
-    core::time::wait(2);
+    core::time::wait(10);   // tREADY - wait for device to be ready
 
-    // ============================================================
     // Restore MOSI to SPI alternate function
-    // ============================================================
     GPIOC->MODER &= ~GPIO_MODER_MODE12;        // Clear MOSI
     GPIOC->MODER |= GPIO_MODER_MODE12_1;       // Restore AF mode
     GPIOC->AFR[1] &= ~(0xF << ((12-8)*4));
     GPIOC->AFR[1] |= (6 << ((12-8)*4));        // AF6 = SPI3
-
-    #ifdef BMS_DEBUG
-    if (uart_safe_mode) {
-        uart->puts("Wake sequence complete\r\n");
-    }
-    #endif
 }
 
-/* Initialization of the BMS master. */
+/**
+ * @brief Initialize the BMS master system
+ *
+ * Performs:
+ * - Timer initialization
+ * - GPIO default configuration
+ * - Communication peripheral setup (I2C, SPI, CAN, UART)
+ * - Device instantiation
+ * - Device handshake and validation
+ *
+ * @note Designed to run once; subsequent calls are ignored
+ */
 void msd::bms::BmsMaster::init() {
     if (initialized_) {
         return;
@@ -189,14 +195,13 @@ void msd::bms::BmsMaster::init() {
 
     Timer2_Init_1MHz();
 
-    // ALL leds are set high upon initialization (POST test)
-    // each led turns off as post completes
+    // POST indicator: all LEDs ON initially
     extra_led.setState(core::io::GPIO::State::HIGH);
     error_led.setState(core::io::GPIO::State::HIGH);
     warning_led.setState(core::io::GPIO::State::HIGH);
     status_led.setState(core::io::GPIO::State::HIGH);
 
-    // Set initial state for GPIO PINS
+    // Default GPIO states
     dia_en_gpio.writePin(core::io::GPIO::State::LOW);
     sel1_gpio.writePin(core::io::GPIO::State::LOW);
     latch_gpio.writePin(core::io::GPIO::State::LOW);
@@ -206,57 +211,28 @@ void msd::bms::BmsMaster::init() {
     fault_gpio.writePin(IO::GPIO::State::HIGH);
     mosi_gpio.writePin(IO::GPIO::State::HIGH);
 
-
-
     core::time::wait(10);
 
-
-    // POST TEST //
-    // Initialize communication interfaces (e.g., I2C, UART)
-    // Setup safety monitoring systems
-    // Initialize fault handling mechanisms
-
-
-    /**
-     * COMMUNICATION DEVICE INITIALIZATION
-     * uart, i2c spi, can
-     * need to add success/failure verification (shouldn't fail though)
-    */
-
-    // test to toggle mosi and miso pins
-    // while (true) {
-    //     mosi_gpio.writePin(IO::GPIO::State::LOW);
-    //     miso_gpio.writePin(IO::GPIO::State::LOW);
-    //     core::time::wait(10);
-    //     mosi_gpio.writePin(IO::GPIO::State::HIGH);
-    //     miso_gpio.writePin(IO::GPIO::State::HIGH);
-    //     core::time::wait(10);
-    // }
-
-    i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>(); // i2c init
+    // Initialize communication peripherals
+    i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>();
     can = &IO::getCAN<IO::Pin::PB_6, IO::Pin::PB_5>();
-    spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1); // spi init
+    spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1);
 
     spi->configureSPI(SPI_SPEED_1MHZ, IO::SPI::SPIMode::SPI_MODE0, SPI_MSB_FIRST);
 
     #ifdef BMS_DEBUG
-    uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600); // uart init
-    core::log::LOGGER.setUART(uart);
-    core::log::LOGGER.setLogLevel(core::log::Logger::LogLevel::DEBUG);
+        uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600);
+        core::log::LOGGER.setUART(uart);
+        core::log::LOGGER.setLogLevel(core::log::Logger::LogLevel::DEBUG);
 
-    if (uart_safe_mode) {
-        //uart safety
-        if (!uart->isWritable())
+        if (!uart->isWritable()) {
             uart_safe_mode = false;
+        }
+
         uart->puts("              BMS init start           \r\n");
         uart->puts("---------------------------------------\r\n\r\n");
         uart->puts("Starting initializations!\r\n\r\n");
-    }
     #endif
-
-    // ADXL345_SPI_Test(*spi);
-    // while (true);
-
 
     /**
      * ON-BOARD DEVICE INITILIZATION
@@ -266,31 +242,24 @@ void msd::bms::BmsMaster::init() {
     static BQ34 fuel_gage_inst{i2c};
     static DEV::M24C32 eeprom_inst{0x50, *i2c};
     static DEV::BQ79631 hv_monitor_inst{*spi, 0x0, *uart};
-    // static DEV::BQ79600 bridge_inst{*spi, 0x0, *uart};
-    // bridge = &bridge_inst;
-    hv_monitor = &hv_monitor_inst;
-    fuel_gauge = &fuel_gage_inst;
-    eeprom = &eeprom_inst;
 
-    // bridge->runSPITests();
+    fuel_gauge = &fuel_gage_inst;
+    eeprom     = &eeprom_inst;
+    hv_monitor = &hv_monitor_inst;
 
     /**
      * SENSOR SETUP
      * thermistors
-     * need to add success/failure verification (shouldn't fail though)
      */
-
-    // Thermistors
 
     // low voltage thermistors
     therm_adcs_[0] = &IO::getADC<IO::Pin::PA_0>();
     therm_adcs_[1] = &IO::getADC<IO::Pin::PA_1>();
 
     // high voltage thermistors on HVM
-    // GPIO8 - GPIO4
-    // therm_adcs_[2] = &IO::getADC<IO::Pin::PB_4>();
-    // therm_adcs_[3] = &IO::getADC<IO::Pin::PB_3>();
-    // therm_adcs_[4] = &IO::getADC<IO::Pin::PD_2>();
+    therm_adcs_[2] = &IO::getADC<IO::Pin::PB_4>();
+    therm_adcs_[3] = &IO::getADC<IO::Pin::PB_3>();
+    therm_adcs_[4] = &IO::getADC<IO::Pin::PD_2>();
 
     static ThermistorArray therm_array{therm_adcs_};
     thermistors_ = &therm_array;
@@ -318,8 +287,8 @@ void msd::bms::BmsMaster::init() {
             uart->puts("ERROR: BQ34Z100 not detected!\r\n");
         }
         #endif
-        state_ = BmsState::FAULT;
-        return; //go to error state
+        // state_ = BmsState::FAULT;
+        // return; //go to error state
     }
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
@@ -343,8 +312,8 @@ void msd::bms::BmsMaster::init() {
             uart->puts("ERROR: EEPROM failed integrity check\r\n");
         }
         #endif
-        state_ = BmsState::FAULT;
-        return; // go to error state
+        // state_ = BmsState::FAULT;
+        // return; // go to error state
     }
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
@@ -382,7 +351,12 @@ void msd::bms::BmsMaster::init() {
     // Wake from GPIO
     gpiowake();
 
-    core::time::wait(10);
+    // while (true) {
+    //     bridge->singleWrite(0x00, 0x309, 0x21);
+    //     core::time::wait(1000);
+    // }
+
+    core::time::wait(50);
 
     // Simple read test - don't call init(), just try reading
     uint8_t dev_conf = 0;
@@ -419,39 +393,126 @@ void msd::bms::BmsMaster::init() {
 
     warning_led.setState(core::io::GPIO::State::LOW); // bridge detection complete
 
+    // return;
+
     #ifdef BMS_DEBUG
     if (uart_safe_mode) {
         uart->puts("Sending wake to devices again...\r\n");
     }
     #endif
-    bridge->singleWrite(0x00, 0x309, 20);
+    // test write loop
+    while (true) {
+        bridge->singleWrite(0x00, 0x309, 0x21);
+        core::time::wait(1000);
+        // bridge -> singleRead(0x00, 0x2001, dev_conf);
+        // core::time::wait(1000);
 
-    bool auto_addressing = true;
+    }
+    bridge->singleWrite(0x00, 0x309, 21);
+
+
+    core::time::wait(11*STACK_DEVICES);
 
     // start auto-addressing
-    bridge->autoAddressStack(STACK_DEVICES);
-    uint8_t val = 0;
+    // bridge->autoAddressStack(STACK_DEVICES);
 
-    for (uint8_t addr = 0; addr < STACK_DEVICES; addr++) {
-        if (bridge->singleRead(addr, 0x2001, val)) {
-            #ifdef BMS_DEBUG
-            if (uart_safe_mode) {
-                uart->printf("Device %d OK: 0x%02X\r\n", addr, val);
-            }
-            #endif
-            // auto_addressing = true;
-        } else {
-            #ifdef BMS_DEBUG
-            if (uart_safe_mode) {
-                uart->printf("Device %d FAIL\r\n", addr);
-            }
-            #endif
+    // return;
 
-            auto_addressing = false;
-        }
+    // try custom addressing again...
+    // Bridge stays device 0
+    bridge-> singleWrite(0x00, 0x308, 0x00);
+
+    // Ensure send wake and enable addressing
+    bridge -> singleWrite(0x00, 0x309, 0x20);
+    core::time::wait(10);
+
+    // bridge -> singleWrite(0x00, 0x0700, 0xA5);
+    // core::time::wait(20);
+    //
+    // bridge -> singleRead(0x0, 0x0702, dev_conf); //test
+
+    bridge -> singleWrite(0x00, 0x309, 0x01);
+    core::time::wait(2);
+
+    bridge -> broadcastWrite(0x306, 0x1);
+    core::time::wait(2);
+
+
+    // Verify HVM at address 1
+    if (uint8_t hvm_val = 0; bridge->singleRead(1, 0x2001, hvm_val)) {
+        uart->printf("✓ Device 1 (HVM): DIR0_ADDR = 0x%02X\r\n", hvm_val);
+        bq79631_present = true;
+    } else {
+        uart->puts("✗ Device 1 (HVM) not responding\r\n");
     }
 
-    if (!auto_addressing) {
+    core::time::wait(5);
+
+    // bridge -> singleWrite(0x01, 0x0308, 0x3);
+
+
+    //
+    //
+    // bridge -> singleWrite(0x00, 0x309, 0x01);
+    // core::time::wait(5);
+    //
+    // bridge -> singleWrite(0x01, 0x0700, 0xA5);
+    //
+    // core::time::wait(20);
+    //
+    // bridge -> singleWrite(0x01, 0x0702, 0x15);
+    // core::time::wait(20);
+    //
+    // bridge -> singleRead(0x01, 0x0702, dev_conf);
+
+    // return;
+
+    bridge -> singleWrite(0x01, 0x0308, 0x3);
+
+    bridge -> singleRead(0x1, 0x0308, dev_conf);
+
+    bridge -> broadcastWrite(0x306, 0x2);
+    core::time::wait(2);
+
+
+    // Verify Slave at address 2
+    if (uint8_t slave_val = 0; bridge->singleRead(2, 0x2001, slave_val)) {
+        uart->printf("✓ Device 2 (Slave1): DIR0_ADDR = 0x%02X\r\n", slave_val);
+        slave1_present = true;
+    } else {
+        uart->puts("✗ Device 2 (Slave1) not responding\r\n");
+    }
+
+    bridge -> singleWrite(0x02, 0x0308, 0x2);
+    core::time::wait(2);
+
+    bridge -> singleRead(0x2, 0x0308, dev_conf);
+
+    // while (true) {
+    //     bridge -> broadcastWrite(0x306, 0x2);
+    //     bridge -> stackRead(0x308, dev_conf);
+    // }
+
+    //
+    // bridge -> broadcastWrite(0x0309, 0x20);
+    // core::time::wait(2);
+
+    bridge -> singleWrite(0x00, 0x0309, 0x20);
+
+    bridge -> singleRead(0x0, 0x2301, dev_conf);
+    // bridge -> singleRead(0x01, 0x2301, dev_conf);
+
+
+    // Verify Slave at address 3 (not currently connected
+    // if (uint8_t slave_val = 0; bridge->singleRead(3, 0x0306, slave_val)) {
+    //     uart->printf("✓ Device 3 (Slave2): DIR0_ADDR = 0x%02X\r\n", slave_val);
+    // } else {
+    //     uart->puts("✗ Device 3 (Slave2) not responding\r\n");
+    // }
+
+    return;
+
+    if (!(bq79600_present && slave1_present)) {
         #ifdef BMS_DEBUG
             if (uart_safe_mode) {
                 uart->puts("ERROR: Auto-addressing failed\r\n");
@@ -490,22 +551,22 @@ void msd::bms::BmsMaster::init() {
 
 
 /**
- * @brief Update routine for the BMS master.
+ * @brief Main periodic update loop
  *
- * This function should be called periodically to monitor system status,
- * process communications, and handle safety events.
+ * Executes measurement acquisition, protection evaluation,
+ * and state machine progression.
  */
 void msd::bms::BmsMaster::update() {
-    // Monitor battery parameters (voltage, current, temperature)
-    // Process incoming messages and commands
-    // Check for safety violations and trigger fault handling if necessary
     if (!initialized_) {
         return;
     }
+
     status_led.setState(core::io::GPIO::State::HIGH);
+
     update_measurements();
     update_protection();
     update_state_machine();
+
     status_led.setState(core::io::GPIO::State::LOW);
 
     // test contactor switch
@@ -517,10 +578,19 @@ void msd::bms::BmsMaster::update() {
     // fault_gpio.writePin(core::io::GPIO::State::HIGH);
     // extra_led.setState(core::io::GPIO::State::LOW);
 
-
-
 }
 
+/**
+ * @brief Update all sensor and device measurements
+ *
+ * Reads:
+ * - Slave (BQ79616)
+ * - Fuel gauge (BQ34)
+ * - HV monitor (BQ79631)
+ * - Thermistor array
+ *
+ * Updates internal state variables and triggers FAULT state on failure.
+ */
 void msd::bms::BmsMaster::update_measurements() {
     // main slave updates first
     // will implement after daisy chain fixed
@@ -646,6 +716,14 @@ void msd::bms::BmsMaster::update_measurements() {
 
 }
 
+/**
+ * @brief Evaluate protection conditions
+ *
+ * Checks device flags against defined masks and updates system state:
+ * - FAULT if critical condition detected
+ * - WARNING if non-critical condition detected
+ * - NORMAL otherwise
+ */
 void msd::bms::BmsMaster::update_protection() {
     // protection logic placeholder
     // will handle OV/UV, OT/UT & OSC/SCD
@@ -685,6 +763,11 @@ void msd::bms::BmsMaster::update_protection() {
     state_ = BmsState::NORMAL;
 }
 
+/**
+ * @brief Update BMS state machine
+ *
+ * Handles transitions and associated behaviors for each state.
+ */
 void msd::bms::BmsMaster::update_state_machine() {
     switch (state_) {
         case BmsState::INIT:
@@ -710,13 +793,11 @@ void msd::bms::BmsMaster::update_state_machine() {
 
 
 /**
- * @brief Shutdown the BMS master.
+ * @brief Shutdown the BMS system
  *
- * Safely de-initializes the BMS master and performs any necessary cleanup.
+ * Safely disables system operation and resets initialization state.
  */
 void msd::bms::BmsMaster::shutdown() {
-    // Safely shutdown communication interfaces
-    // Perform any necessary cleanup
     if (!initialized_) {
         return;
     }

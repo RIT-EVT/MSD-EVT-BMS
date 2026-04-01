@@ -14,6 +14,7 @@ Date: January 2026
 
 #include "core/io/SPI.hpp"
 #include "core/io/UART.hpp"
+#include "dev/BQ79600.hpp"
 #include <cstdint>
 
 namespace core::dev {
@@ -53,11 +54,7 @@ private:
     core::io::SPI& spi_;
     uint8_t device_;
     core::io::UART& uart_;
-
-    /** Command helpers */
-    bool readRegister(uint16_t reg, uint8_t* data, uint8_t len) const;
 };
-
 } // namespace core::dev
 
 #endif // MSD_EVT_BMS_BQ79631_H

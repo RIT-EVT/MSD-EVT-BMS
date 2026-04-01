@@ -1,75 +1,108 @@
-//
-// Created by Key'Mon Jenkins on 2/5/26
-
-//
+/**
+ * @file BQ79600.cpp
+ * @brief Implementation of the BQ79600 SPI bridge interface.
+ *
+ * This file implements SPI communication with the BQ79600 bridge device,
+ * including initialization, register access, CRC handling, and stack
+ * auto-addressing for daisy-chained battery monitor devices.
+ *
+ * @note This driver uses custom SPI framing with CRC16 validation and
+ * requires strict timing between transactions.
+ *
+ * Project: MSD_BMS
+ * Author: Key'Mon Jenkins
+ * Date: February 2026
+ */
 
 #include "dev/BQ79600.hpp"
 
 #define BMS_DEBUG // MUST BE DEFINED IN BMS.CPP
 #define MESSAGE_DEBUG
 
+/* =========================
+ * Register Map (Partial)
+ * ========================= */
 namespace {
-// Existing registers
-constexpr uint16_t REG_CONTROL1     = 0x0309;
-constexpr uint16_t REG_DIR0_ADDR    = 0x0306;
-constexpr uint16_t REG_COMM_CTRL    = 0x0308;
-constexpr uint16_t REG_DEV_CONF1    = 0x2001;
 
-// Add these:
-constexpr uint16_t REG_CONTROL2     = 0x030A;
-constexpr uint16_t REG_TX_HOLD_OFF  = 0x0302;
-constexpr uint16_t REG_SPI_CONF     = 0x0303;
-constexpr uint16_t REG_FAULT_MSK1   = 0x031C;
-constexpr uint16_t REG_FAULT_MSK2   = 0x031D;
-constexpr uint16_t REG_FAULT_RST1   = 0x030C;
-constexpr uint16_t REG_FAULT_RST2   = 0x030D;
+constexpr uint16_t REG_CONTROL1      = 0x0309;
+constexpr uint16_t REG_DIR0_ADDR     = 0x0306;
+constexpr uint16_t REG_COMM_CTRL     = 0x0308;
+constexpr uint16_t REG_DEV_CONF1     = 0x2001;
+
+constexpr uint16_t REG_CONTROL2      = 0x030A;
+constexpr uint16_t REG_TX_HOLD_OFF   = 0x0302;
+constexpr uint16_t REG_SPI_CONF      = 0x0303;
+constexpr uint16_t REG_FAULT_MSK1    = 0x031C;
+constexpr uint16_t REG_FAULT_MSK2    = 0x031D;
+constexpr uint16_t REG_FAULT_RST1    = 0x030C;
+constexpr uint16_t REG_FAULT_RST2    = 0x030D;
 constexpr uint16_t REG_FAULT_SUMMARY = 0x030E;
-constexpr uint16_t REG_GPIO_CONF1   = 0x0320;
-constexpr uint16_t REG_GPIO_CONF2   = 0x0321;
-constexpr uint16_t REG_OTP_ECC_BASE = 0x0343;
-constexpr uint8_t  OTP_ECC_COUNT    = 8;
+
+constexpr uint16_t REG_GPIO_CONF1    = 0x0320;
+constexpr uint16_t REG_GPIO_CONF2    = 0x0321;
+
+constexpr uint16_t REG_OTP_ECC_BASE  = 0x0343;
+constexpr uint8_t  OTP_ECC_COUNT     = 8;
 }
 
 namespace core::dev {
+
+/**
+ * @brief Construct a new BQ79600 driver instance
+ *
+ * @param spi SPI interface used for communication
+ * @param spi_device Chip select index for this device
+ * @param uart UART interface for debug output
+ */
 BQ79600::BQ79600(io::SPI& spi, const uint8_t spi_device, io::UART& uart)
     : spi_(spi), device_(spi_device), uart_(uart){}
 
-/*
- * Read & Write helper functions for the device
- * Broadcast - used to send messages to every device
- * Stack - used to communicate with the entire stack
- * Single - used to communicate with a single device
- *
- * "dev" only used for single read/writes
- **/
+/**
+ * @brief Broadcast write to all devices in the stack
+ */
 void BQ79600::broadcastWrite(uint16_t reg, uint8_t val) const {
     writeReg16(0x0, reg, val, false, true);
 }
 
+/**
+ * @brief Perform a stack-wide read
+ */
 bool BQ79600::stackRead(uint16_t reg, uint8_t& val) const {
     return readReg16(0x0, reg, val, true);
 }
 
+/**
+ * @brief Write to all devices in stack mode
+ */
 void BQ79600::stackWrite(uint16_t reg, uint8_t val) const {
     writeReg16(0x0, reg, val, true, false);
 }
 
+/**
+ * @brief Read from a specific device
+ */
 bool BQ79600::singleRead(uint8_t dev, uint16_t reg, uint8_t& val) const {
     return readReg16(dev, reg, val, false);
 }
 
+/**
+ * @brief Write to a specific device
+ */
 void BQ79600::singleWrite(uint8_t dev, uint16_t reg, uint8_t val) const {
     writeReg16(dev, reg, val, false, false);
 }
 
-/* Initialization sequence
+/**
+ * @brief Initialize the BQ79600 device
  *
+ * Verifies device presence, configures control registers,
+ * disables communication timeout, clears faults, and validates
+ * device identity.
  *
- **/
+ * @return true if initialization successful, false otherwise
+ */
 bool BQ79600::init() {
 
-    // verify ACTIVE mode
-    // Read DEV_CONF1 - should return 0x14
     #ifdef BMS_DEBUG
         uart_.puts("Checking device presence...\r\n");
     #endif
@@ -77,6 +110,7 @@ bool BQ79600::init() {
     uint8_t dev_conf = 0;
     bool read_success = singleRead(0x00, REG_DEV_CONF1, dev_conf);
 
+    // Device must return 0x14 in ACTIVE mode
     if (!read_success || dev_conf != 0x14) {
         #ifdef BMS_DEBUG
             uart_.printf("Device not responding. DEV_CONF1 = 0x%02X (expect 0x14)\r\n", dev_conf);
@@ -87,30 +121,22 @@ bool BQ79600::init() {
 
     #ifdef BMS_DEBUG
         uart_.printf("✓ DEV_CONF1 = 0x%02X - Device in ACTIVE mode!\r\n", dev_conf);
-    #endif
-
-    // Configure CONTROL1 to stay in ACTIVE mode
-    // bit[5] = SPI_ACTIVE = 1 (keep SPI active)
-    // bit[0] = SEND_WAKE = 0 (don't propagate wake yet)
-    #ifdef BMS_DEBUG
         uart_.puts("Configuring CONTROL1...\r\n");
     #endif
 
+    // Keep SPI active
     singleWrite(0x00, REG_CONTROL1, 0x20);
-
     core::time::wait(10);
 
-
-    // Disable communication timeout
-    // Prevents auto-sleep due to communication gaps
     #ifdef BMS_DEBUG
         uart_.puts("Disabling communication timeout...\r\n");
     #endif
 
-    singleWrite(0x00, 0x0302, 0x02);  // COMM_TIMEOUT[CTL_ACT] = 1
+    // Disable communication timeout
+    singleWrite(0x00, 0x0302, 0x02);
     core::time::wait(1);
 
-    // Step 5: Clear any fault flags
+    // Clear fault registers
     #ifdef BMS_DEBUG
         uart_.puts("Clearing fault flags...\r\n");
     #endif
@@ -119,7 +145,7 @@ bool BQ79600::init() {
     singleWrite(0x00, 0x030D, 0xFF);  // FAULT_RST2
     core::time::wait(1);
 
-    // Step 6: Verify FAULT_SUMMARY is clear
+    // (optional) verify fault summary cleared
     uint8_t fault_sum = 0;
     singleRead(0x00, 0x030E, fault_sum);
 
@@ -129,11 +155,11 @@ bool BQ79600::init() {
                      fault_sum == 0x00 ? "✓" : "⚠");
     #endif
 
-    // Step 7: Read Device ID
     #ifdef BMS_DEBUG
         uart_.puts("Reading Device ID...\r\n");
     #endif
 
+    // (non-critical) Read Device ID
     uint16_t device_id = 0;
     if (readDeviceID(device_id)) {
         #ifdef BMS_DEBUG
@@ -152,30 +178,36 @@ bool BQ79600::init() {
     return true;
 }
 
-/*
- * CRC-16-IBM generator polynomial
- * polinomial = 8005, reflected A001
- * LSB first!
- **/
+/**
+ * @brief Compute CRC-16 (IBM variant, reflected)
+ *
+ * Polynomial: 0x8005 (reflected 0xA001)
+ * Bit order: LSB-first
+ *
+ * @param data Pointer to data buffer
+ * @param len Number of bytes
+ * @return Calculated CRC16 value
+ */
 uint16_t BQ79600::crc16(const uint8_t* data, uint8_t len) {
     uint16_t crc = 0xFFFF;
 
     for (uint8_t i = 0; i < len; i++) {
         crc ^= data[i];
         for (uint8_t j = 0; j < 8; j++) {
-            if (crc & 0x0001)
-                crc = (crc >> 1) ^ 0xA001;   // reflected poly
-            else
-                crc >>= 1;
+            crc = (crc & 0x0001) ? (crc >> 1) ^ 0xA001 : (crc >> 1);
         }
     }
     return crc;
 }
 
-/*
- * Auto-addressing sequence for the BQ79600
- * steps are carefully commented throughout the function
- **/
+/**
+ * @brief Perform auto-addressing for daisy-chained devices
+ *
+ * Assigns sequential addresses to devices in the stack and configures
+ * communication roles (stack vs top-of-stack).
+ *
+ * @param expected_devices Number of devices expected in the chain
+ */
 void BQ79600::autoAddressStack(uint8_t expected_devices) const {
 
     #ifdef BMS_DEBUG
@@ -183,86 +215,77 @@ void BQ79600::autoAddressStack(uint8_t expected_devices) const {
     #endif
 
 
-    // ------------------------------------------------------------
     // Step 1: Dummy stack writes to OTP_ECC_DATAIN1–8
-    // ------------------------------------------------------------
     #ifdef BMS_DEBUG
         uart_.puts("Step 1: DLL sync (dummy stack writes)...\r\n");
     #endif
     for (uint8_t i = 0; i < OTP_ECC_COUNT; i++) {
         stackWrite(REG_OTP_ECC_BASE + i, 0x00);
-        // core::time::wait(2);
     }
+    core::time::wait(5);
 
-    // ------------------------------------------------------------
     // Step 2: Enable auto-addressing
     // bit[0] = ADDR_WR  = 1 → enables auto-addressing
-    // ------------------------------------------------------------
     #ifdef BMS_DEBUG
         uart_.puts("Step 2: Enable auto-addressing...\r\n");
     #endif
     broadcastWrite(REG_CONTROL1, 0x01);
-    core::time::wait(2);
+    // singleWrite(0x0, REG_CONTROL1, 0x01);
+    core::time::wait(5);
 
-    // ------------------------------------------------------------
     // Step 3: Assign addresses via DIR0_ADDR
-    // ------------------------------------------------------------
+    // MUST START AT ADDRESS 0x1
     #ifdef BMS_DEBUG
         uart_.puts("Step 3: Assigning addresses...\r\n");
     #endif
 
     for (uint8_t addr = 0; addr < expected_devices; addr++) {
-        broadcastWrite(REG_DIR0_ADDR, addr);
+        broadcastWrite(REG_DIR0_ADDR, addr+1);
 
     #ifdef BMS_DEBUG
-        uart_.printf("\tAssigned address %u\r\n", addr);
+        uart_.printf("\tAssigned address %u\r\n", addr+1);
     #endif
 
-        core::time::wait(2);
+        core::time::wait(5);
     }
 
-    // EXIT auto-address mode
-    broadcastWrite(REG_CONTROL1, 0x00);
-    core::time::wait(2);
-
-    // core::time::wait(10);
-
-    // ------------------------------------------------------------
-    // Step 4: broadcast write 0x02 to comm_ctrl register
-    // ------------------------------------------------------------
+    // Step 4: stack write 0x02 to comm_ctrl register
+    // this sets all devices as stack devices
     #ifdef BMS_DEBUG
         uart_.puts("Step 4: Configure all as stack devices...\r\n");
     #endif
-    broadcastWrite(REG_COMM_CTRL, 0x02);
+    stackWrite(REG_COMM_CTRL, 0x02);
+    core::time::wait(5);
 
-    core::time::wait(2);
-
-    // ------------------------------------------------------------
     // Step 5: Single write 0x3 to comm control register to top device
-    // ------------------------------------------------------------
     #ifdef BMS_DEBUG
         uart_.printf("Step 5: Mark device %u as top of stack...\r\n", expected_devices-1);
     #endif
-    singleWrite(expected_devices-1, REG_COMM_CTRL, 0x03);
+    singleWrite(expected_devices, REG_COMM_CTRL, 0x03);
 
-    // core::time::wait(10);
 
-    // ------------------------------------------------------------
+    core::time::wait(5);
+
+
+    // EXIT auto-address mode
+    broadcastWrite(REG_CONTROL1, 0x20);
+    // singleWrite(0x0, REG_CONTROL1, 0x00);
+    // core::time::wait(5);
+
     // Step 6: Dummy stack reads (DLL sync)
-    // ------------------------------------------------------------
+    uint8_t dummy = 0;
+
     #ifdef BMS_DEBUG
         uart_.puts("Step 6: DLL sync (dummy stack reads)...\r\n");
     #endif
 
     for (uint8_t i = 0; i < OTP_ECC_COUNT; i++) {
-        uint8_t dummy = 0;
         stackRead(REG_OTP_ECC_BASE + i, dummy);
 
-        core::time::wait(2);
+        core::time::wait(5);
     }
 
-    broadcastWrite(REG_CONTROL1, 0x00); // SPI_ACTIVE
-    core::time::wait(2);
+    singleRead(0x0, 0x2001, dummy);
 
 
     #ifdef BMS_DEBUG
@@ -271,9 +294,13 @@ void BQ79600::autoAddressStack(uint8_t expected_devices) const {
 
 }
 
-/*
- * Register initialization
- **/
+/**
+ * @brief Initialize bridge registers after addressing
+ *
+ * Configures communication mode, clears faults, and validates device state.
+ *
+ * @return true if configuration successful
+ */
 bool BQ79600::initRegisters()
 {
     #ifdef BMS_DEBUG
@@ -351,10 +378,14 @@ bool BQ79600::initRegisters()
     return true;
 }
 
-/*
- * Returns BQ79600 device ID
- **/
-bool BQ79600::readDeviceID(uint16_t& id) {
+
+/**
+ * @brief Read device ID from BQ79600
+ *
+ * @param id Output variable for device ID
+ * @return true on success, false on failure
+ */
+bool BQ79600::readDeviceID(uint16_t& id) const {
     uint8_t id_low = 0, id_high = 0;
 
     // Device ID is at register 0x0500 (2 bytes)
@@ -368,20 +399,23 @@ bool BQ79600::readDeviceID(uint16_t& id) {
     return true;
 }
 
-/*
- * 16 BIT SPI write for BQ79600
- * Frame structure:
- *  broadcast - [D0] [REG (HI)] [REG(LO)] [DATA] [CRC LSB] [CRC MSB]
- *  stack - [B0] [REG (HI)] [REG(LO)] [DATA] [CRC LSB] [CRC MSB]
- *  single - [90] [DEV] [REG (HI)] [REG(LO)] [DATA] [CRC LSB] [CRC MSB]
- **/
+/**
+ * @brief Low-level SPI write transaction
+ *
+ * Constructs protocol-specific frame depending on mode:
+ * - Broadcast
+ * - Stack
+ * - Single device
+ *
+ * Includes CRC16 and sends over SPI.
+ */
 void BQ79600::writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, bool broadcast) const {
     uint8_t frame[7];
     uint8_t frame_len;
 
     if (broadcast) {
         // Broadcast: 7 bytes total
-        frame[0] = 0xD4;
+        frame[0] = 0xD0;
         frame[1] = (reg >> 8);
         frame[2] = reg & 0xFF;
         frame[3] = val;
@@ -430,15 +464,20 @@ void BQ79600::writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, boo
     spi_.endTransmission(device_);
 }
 
-/*
- * 16 BIT SPI read for BQ79600
- * Frame structure:
- *  broadcast - [C0] [REG (HI)] [REG(LO)] [LEN] [CRC LSB] [CRC MSB] - unused
- *  stack - [A0] [REG (HI)] [REG(LO)] [LEN] [CRC LSB] [CRC MSB]
- *  single - [80] [DEV] [REG (HI)] [REG(LO)] [LEN] [CRC LSB] [CRC MSB]
+/**
+ * @brief Low-level SPI read transaction
  *
- *  Must write to request message read, then clock out bytes while reading
- **/
+ * Performs a two-phase SPI operation:
+ * 1. Send read command frame
+ * 2. Clock out response data
+ *
+ * Validates:
+ * - CRC correctness
+ * - Device address (if single mode)
+ * - Register address
+ *
+ * @return true if response is valid
+ */
 bool BQ79600::readReg16(uint8_t dev, uint16_t reg, uint8_t& val, bool stack) const {
     uint8_t rx_frame[7] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF}; // required to receive data!!
     uint8_t frame[7];

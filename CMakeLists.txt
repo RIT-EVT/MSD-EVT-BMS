@@ -69,6 +69,9 @@ add_library(${PROJECT_NAME} STATIC
         src/dev/LED.cpp
         include/dev/BQ79600.hpp
         src/dev/BQ79600.cpp
+        include/dev/BMS_model_balancing.h
+        src/dev/BMS_model_balancing.cpp
+        include/dev/BMS_model_balancing.h
 )
 
 # Add sources
