@@ -16,8 +16,8 @@
 
 #include "dev/BQ79600.hpp"
 
-#define BMS_DEBUG // MUST BE DEFINED IN BMS.CPP
-#define MESSAGE_DEBUG
+// #define BMS_DEBUG // MUST BE DEFINED IN BMS.CPP
+// #define MESSAGE_DEBUG
 
 /* =========================
  * Register Map (Partial)
@@ -230,7 +230,6 @@ void BQ79600::autoAddressStack(uint8_t expected_devices) const {
         uart_.puts("Step 2: Enable auto-addressing...\r\n");
     #endif
     broadcastWrite(REG_CONTROL1, 0x01);
-    // singleWrite(0x0, REG_CONTROL1, 0x01);
     core::time::wait(5);
 
     // Step 3: Assign addresses via DIR0_ADDR
@@ -240,10 +239,10 @@ void BQ79600::autoAddressStack(uint8_t expected_devices) const {
     #endif
 
     for (uint8_t addr = 0; addr < expected_devices; addr++) {
-        broadcastWrite(REG_DIR0_ADDR, addr+1);
+        broadcastWrite(REG_DIR0_ADDR, addr);
 
     #ifdef BMS_DEBUG
-        uart_.printf("\tAssigned address %u\r\n", addr+1);
+        uart_.printf("\tAssigned address %u\r\n", addr);
     #endif
 
         core::time::wait(5);
@@ -261,29 +260,36 @@ void BQ79600::autoAddressStack(uint8_t expected_devices) const {
     #ifdef BMS_DEBUG
         uart_.printf("Step 5: Mark device %u as top of stack...\r\n", expected_devices-1);
     #endif
-    singleWrite(expected_devices, REG_COMM_CTRL, 0x03);
+    singleWrite(expected_devices - 1, REG_COMM_CTRL, 0x03);
 
 
     core::time::wait(5);
 
 
-    // EXIT auto-address mode
-    broadcastWrite(REG_CONTROL1, 0x20);
-    // singleWrite(0x0, REG_CONTROL1, 0x00);
-    // core::time::wait(5);
-
-    // Step 6: Dummy stack reads (DLL sync)
+    // WORKAROUND: Using singleRead to top-of-stack to force traffic
+    // through the whole chain, bypassing the stackRead library bug.
     uint8_t dummy = 0;
 
     #ifdef BMS_DEBUG
-        uart_.puts("Step 6: DLL sync (dummy stack reads)...\r\n");
+    uart_.puts("Step 6: DLL sync (dummy single reads to top device)...\r\n");
     #endif
 
     for (uint8_t i = 0; i < OTP_ECC_COUNT; i++) {
-        stackRead(REG_OTP_ECC_BASE + i, dummy);
-
+        singleRead(expected_devices - 1, REG_OTP_ECC_BASE + i, dummy);
         core::time::wait(5);
     }
+
+    // Step 7: Verify addressed devices
+    #ifdef BMS_DEBUG
+    uart_.puts("Step 7: Verify addressed devices...\r\n");
+    #endif
+
+    // Verify both devices individually instead of using broken stackRead
+    for (uint8_t i = 0; i < expected_devices; i++) {
+        singleRead(i, REG_DIR0_ADDR, dummy);
+        core::time::wait(5);
+    }
+
 
     singleRead(0x0, 0x2001, dummy);
 
@@ -462,6 +468,8 @@ void BQ79600::writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, boo
     spi_.write(frame, frame_len);
 
     spi_.endTransmission(device_);
+
+    core::time::wait(1);
 }
 
 /**

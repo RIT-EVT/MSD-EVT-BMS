@@ -1,8 +1,10 @@
 /**
 @file BQ79600.hpp
 @brief C++ header for interfacing with the BQ79600 bridge device.
-This header defines a class for communicating with the BQ79600 over SPI
-using STM32 HAL libraries.
+
+This header defines the BQ79600 class, which provides an interface for
+SPI communication with the BQ79600 bridge IC. The bridge manages
+communication between the MCU and daisy-chained battery monitor devices.
 
 Project: MSD_BMS
 Author: Key'Mon Jenkins
@@ -24,7 +26,7 @@ class BQ79600 {
 public:
     explicit BQ79600(core::io::SPI& spi, uint8_t spi_device, core::io::UART& uart);
 
-    bool readDeviceID(uint16_t& id);
+    bool readDeviceID(uint16_t& id) const;
 
     bool init();
 
@@ -39,16 +41,15 @@ public:
     bool initRegisters();
 
 private:
-    core::io::SPI& spi_;
-    uint8_t device_;
-    core::io::UART& uart_;
+    core::io::SPI& spi_;   // SPI interface used for communication
+    uint8_t device_;       // SPI chip select index / device identifier
+    core::io::UART& uart_; // UART interface for debug output
 
-    static uint16_t crc16(const uint8_t* data, uint8_t len);
+    static uint16_t crc16(const uint8_t* data, uint8_t len); // CRC16 calculation for frame integrity
 
-    void writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, bool broadcast) const;
+    void writeReg16(uint8_t dev, uint16_t reg, uint8_t val, bool stack, bool broadcast) const; // Low-level write helper
 
-    bool readReg16(uint8_t dev, uint16_t reg, uint8_t& val, bool stack) const;
-
+    bool readReg16(uint8_t dev, uint16_t reg, uint8_t& val, bool stack) const; // Low-level read helper
 };
 
 } // namespace core::dev

@@ -1,8 +1,8 @@
 /**
 @file BQ79631.hpp
 @brief C++ header for interfacing with the BQ79631 high voltage monitor.
-This header defines a class for communicating with the BQ79631 over SPI
-using STM32 HAL libraries.
+This header defines a class for communicating with the BQ79631 over the
+daisy-chain bus via the BQ79600 bridge.
 
 Project: MSD_BMS
 Author: Key'Mon Jenkins
@@ -12,8 +12,6 @@ Date: January 2026
 #ifndef MSD_EVT_BMS_BQ79631_H
 #define MSD_EVT_BMS_BQ79631_H
 
-#include "core/io/SPI.hpp"
-#include "core/io/UART.hpp"
 #include "dev/BQ79600.hpp"
 #include <cstdint>
 
@@ -21,22 +19,18 @@ namespace core::dev {
 
 class BQ79631 {
 public:
-    explicit BQ79631(core::io::SPI& spi, uint8_t spi_device, core::io::UART& uart);
+    /**
+     * @brief Construct a new BQ79631 HVM Device
+     * @param bridge Reference to the BQ79600 Bridge handling the physical bus
+     * @param stack_address The daisy-chain address assigned to this device
+     */
+    BQ79631(BQ79600& bridge, uint8_t stack_address);
 
-    bool writeReg16(uint8_t dev, uint16_t reg, uint8_t val);
-
-    bool readReg16(uint8_t dev, uint16_t reg, uint8_t& val);
-
-    /** Wake the device (send any I2C activity to wake) */
-    bool wake();
-
-    bool ping();
-
-    /** Read DEVICE_ID (should return 0x7963) */
+    /** Read DEVICE_ID */
     bool readDeviceID(uint16_t& id);
 
-    /** Read DEVICE REVISION (should return 0x7963) */
-    bool readRevision(uint8_t& id);
+    /** Read DEVICE REVISION */
+    bool readRevision(uint8_t& rev);
 
     /** Read pack voltage (mV) */
     bool getPackVoltage_mV(uint16_t& mv);
@@ -51,11 +45,10 @@ public:
     bool getFaultFlags(uint16_t& flags);
 
 private:
-    core::io::SPI& spi_;
-    uint8_t device_;
-    core::io::UART& uart_;
+    BQ79600& bridge_;       // The communication bridge
+    uint8_t stack_address_; // This device's specific daisy-chain address
 };
+
 } // namespace core::dev
 
 #endif // MSD_EVT_BMS_BQ79631_H
-

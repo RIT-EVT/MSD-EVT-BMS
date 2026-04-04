@@ -18,6 +18,7 @@
 #include "BMS.hpp"
 
 #include "core/utils/log.hpp"
+#include "dev/BQ79616.hpp"
 #define BMS_DEBUG
 
 namespace IO = core::io;
@@ -40,8 +41,10 @@ IO::CAN* can = nullptr;       // CAN interface
 namespace {
 BQ34* fuel_gauge = nullptr;         // Fuel gauge (BQ34Z100)
 DEV::M24C32* eeprom = nullptr;      // EEPROM storage
-DEV::BQ79631* hv_monitor = nullptr; // High-voltage monitor
 DEV::BQ79600* bridge = nullptr;     // SPI bridge device
+DEV::BQ79631* hv_monitor = nullptr; // High-voltage monitor
+DEV::BQ79616* slave = nullptr;      // Slave board
+
 }
 
 /* =========================
@@ -87,7 +90,7 @@ static bool slave1_present  = false;
 static bool slave2_present  = false;
 static bool init_success    = false;
 
-constexpr uint8_t STACK_DEVICES = 1;
+constexpr uint8_t STACK_DEVICES = 3; // bridge counts as a stack device
 
 /* =========================
  * Singleton Accessor
@@ -236,16 +239,14 @@ void msd::bms::BmsMaster::init() {
 
     /**
      * ON-BOARD DEVICE INITILIZATION
-     * BQ34, M24C32, BQ79631
+     * BQ34, M24C32
      * need to add success/failure verification (shouldn't fail though)
      */
     static BQ34 fuel_gage_inst{i2c};
     static DEV::M24C32 eeprom_inst{0x50, *i2c};
-    static DEV::BQ79631 hv_monitor_inst{*spi, 0x0, *uart};
 
     fuel_gauge = &fuel_gage_inst;
     eeprom     = &eeprom_inst;
-    hv_monitor = &hv_monitor_inst;
 
     /**
      * SENSOR SETUP
@@ -400,46 +401,24 @@ void msd::bms::BmsMaster::init() {
         uart->puts("Sending wake to devices again...\r\n");
     }
     #endif
-    // test write loop
-    while (true) {
-        bridge->singleWrite(0x00, 0x309, 0x21);
-        core::time::wait(1000);
-        // bridge -> singleRead(0x00, 0x2001, dev_conf);
-        // core::time::wait(1000);
-
-    }
-    bridge->singleWrite(0x00, 0x309, 21);
+    bridge->singleWrite(0x00, 0x309, 0x21);
 
 
     core::time::wait(11*STACK_DEVICES);
 
     // start auto-addressing
-    // bridge->autoAddressStack(STACK_DEVICES);
+    bridge->autoAddressStack(STACK_DEVICES);
 
-    // return;
+    // create instances of devices
+    static DEV::BQ79631 hv_monitor_inst{(*bridge), 1};
+    hv_monitor = &hv_monitor_inst;
 
-    // try custom addressing again...
-    // Bridge stays device 0
-    bridge-> singleWrite(0x00, 0x308, 0x00);
-
-    // Ensure send wake and enable addressing
-    bridge -> singleWrite(0x00, 0x309, 0x20);
-    core::time::wait(10);
-
-    // bridge -> singleWrite(0x00, 0x0700, 0xA5);
-    // core::time::wait(20);
-    //
-    // bridge -> singleRead(0x0, 0x0702, dev_conf); //test
-
-    bridge -> singleWrite(0x00, 0x309, 0x01);
-    core::time::wait(2);
-
-    bridge -> broadcastWrite(0x306, 0x1);
-    core::time::wait(2);
+    static DEV::BQ79616 slave_inst{(*bridge), 1};
+    slave = &slave_inst;
 
 
     // Verify HVM at address 1
-    if (uint8_t hvm_val = 0; bridge->singleRead(1, 0x2001, hvm_val)) {
+    if (uint16_t hvm_val = 0; hv_monitor->readDeviceID(hvm_val)) {
         uart->printf("✓ Device 1 (HVM): DIR0_ADDR = 0x%02X\r\n", hvm_val);
         bq79631_present = true;
     } else {
@@ -448,69 +427,14 @@ void msd::bms::BmsMaster::init() {
 
     core::time::wait(5);
 
-    // bridge -> singleWrite(0x01, 0x0308, 0x3);
-
-
-    //
-    //
-    // bridge -> singleWrite(0x00, 0x309, 0x01);
-    // core::time::wait(5);
-    //
-    // bridge -> singleWrite(0x01, 0x0700, 0xA5);
-    //
-    // core::time::wait(20);
-    //
-    // bridge -> singleWrite(0x01, 0x0702, 0x15);
-    // core::time::wait(20);
-    //
-    // bridge -> singleRead(0x01, 0x0702, dev_conf);
-
-    // return;
-
-    bridge -> singleWrite(0x01, 0x0308, 0x3);
-
-    bridge -> singleRead(0x1, 0x0308, dev_conf);
-
-    bridge -> broadcastWrite(0x306, 0x2);
-    core::time::wait(2);
-
 
     // Verify Slave at address 2
-    if (uint8_t slave_val = 0; bridge->singleRead(2, 0x2001, slave_val)) {
+    if (uint16_t slave_val = 0; slave->readDeviceID(slave_val)) {
         uart->printf("✓ Device 2 (Slave1): DIR0_ADDR = 0x%02X\r\n", slave_val);
         slave1_present = true;
     } else {
         uart->puts("✗ Device 2 (Slave1) not responding\r\n");
     }
-
-    bridge -> singleWrite(0x02, 0x0308, 0x2);
-    core::time::wait(2);
-
-    bridge -> singleRead(0x2, 0x0308, dev_conf);
-
-    // while (true) {
-    //     bridge -> broadcastWrite(0x306, 0x2);
-    //     bridge -> stackRead(0x308, dev_conf);
-    // }
-
-    //
-    // bridge -> broadcastWrite(0x0309, 0x20);
-    // core::time::wait(2);
-
-    bridge -> singleWrite(0x00, 0x0309, 0x20);
-
-    bridge -> singleRead(0x0, 0x2301, dev_conf);
-    // bridge -> singleRead(0x01, 0x2301, dev_conf);
-
-
-    // Verify Slave at address 3 (not currently connected
-    // if (uint8_t slave_val = 0; bridge->singleRead(3, 0x0306, slave_val)) {
-    //     uart->printf("✓ Device 3 (Slave2): DIR0_ADDR = 0x%02X\r\n", slave_val);
-    // } else {
-    //     uart->puts("✗ Device 3 (Slave2) not responding\r\n");
-    // }
-
-    return;
 
     if (!(bq79600_present && slave1_present)) {
         #ifdef BMS_DEBUG
@@ -547,7 +471,6 @@ void msd::bms::BmsMaster::init() {
         }
     #endif
 }
-
 
 
 /**

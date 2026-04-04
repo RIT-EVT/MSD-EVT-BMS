@@ -1,38 +1,164 @@
-# BMS Revamp
-Repository for the firmware &amp; software for the Battery Management System for the EVT
+# MSD_BMS Firmware
+Firmware for the Battery Management System (BMS) developed for RIT's Electric Vehicle Team (EVT).
+
+This project implements a high-level BMS master controller responsible for:
+- Monitoring battery health and operating conditions
+- Managing communication with battery ICs
+- Enforcing safety protections
+- Coordinating system-level behavior
+
+Built on top of the EVT-core library for embedded hardware abstraction.
+
+---
 
 # Repository Structure
-- docs - Documentation for the project
-- inc - Header files for the project
-- lib - External libraries used by the project
-- LICENSE - License information for the project
-- src - Source files for the project
-- tests - Test files for the project
+- docs - Project documentation, diagrams, and reports
+- inc - Header files 
+- src - Source files 
+- lib - External dependencies (EVT-core)
+- tests - Test code and validation utilities
+- build - Build output (generated)
+- LICENSE 
+
+---
+
+# System Overview
+
+The BMS firmware runs on an STM32 microcontroller and interfaces with multiple devices:
+
+### Core Devices
+- **BQ34Z100-R2** – Fuel Gauge (I2C)
+- **BQ79600** – SPI Bridge (stack communication)
+- **BQ79631** – High Voltage Monitor
+- **M24C32** – EEPROM
+- Thermistors – Temperature sensing via ADC
+- CAN Transceiver – External communication (planned)
+
+### Responsibilities
+- Measurement acquisition (voltage, current, temperature)
+- Safety monitoring and fault handling
+- Device communication (I2C, SPI, UART, CAN)
+- State machine control
+
+---
 
 # Getting Started
-To get started with the project, clone the repository and navigate to the project directory. Follow the
-instructions in the `lib/EVT-core/README.md` file to set up the EVT-core library, which is a dependency for this project.
-Then, follow the build instructions below to compile the firmware.
 
-## Build Instructions
-The project uses CMake as the build system. Ensure you have CMake installed on your system
-and the GCC ARM toolchain set up as described in the `lib/EVT-core/README.md`.
-To build the project, run the following commands from the project root directory:
+## 1. Clone the Repository
+```
+git clone <repo-url>
+cd MSD_BMS
+```
+## 2. Setup Dependencies
+Follow setup instructions in:
+```
+lib/EVT-core/README.md
+```
+This includes
+- ARM GCC Toolchain
+- CMake configuration
+- HAL/CMSIS setup
+
+# Build Instructions
 ```bash
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=lib/EVT-core/cmake/arm-gcc-toolchain.cmake
 cmake --build build
 ```
+
 This will generate the firmware binary in the `build/` directory.
 
-## Flashing the Firmware
+# Flashing the Firmware
 To flash the compiled firmware onto the target STM32 microcontroller, use OpenOCD, STM32CUBE or ST-Link.
-Refer to the documentation for your specific hardware for instructions on how to flash the firmware.
+Ensure the following:
+- Correct target selected (STM32F446RE)
+- Proper clock configuration
+- Stable power supply
+- Utilize BMS.cpp for testing
 
-## Testing
-The project includes test files located in the `tests/` directory. To run the tests, navigate to the `tests/` directory and follow the instructions in the `README.md` file located there.
 
-# Documentation
-For detailed documentation on the architecture, components, and workflows of the project, refer to the `docs/` directory. This includes information on the core library, BMS components, critical workflows, key integration points, and project-specific conventions.
+# Initialization Flow init()
+The system performs:
 
-# Overview
-The MSD_BMS repository contains firmware for a Battery Management System developed for RIT's Electric Vehicle Team (EVT). The system is built on top of the EVT-core library which provides MCU abstractions for embedded development.
+1. Hardware Setup
+   -	TIM2 configured for microsecond timing
+   -	GPIO initialized (LEDs, control lines)
+
+2. Communication Interfaces
+   -	I2C (fuel gauge + EEPROM)
+   -	SPI (BQ79600 stack)
+   -	UART (debug)
+   -	CAN (initialized, not fully used)
+
+3. Device Initialization
+   -	Fuel gauge (BQ34)
+   -	EEPROM integrity check (write/read test)
+   -	BQ79631 monitor setup
+   
+4. BQ79600 Bring-Up (Critical)
+   -	GPIO-based wake sequence (not SPI)
+   -	SPI communication validation
+   -	Bridge initialization
+
+5. Sensor Setup
+   -	Thermistors initialized via ADC
+
+# Update Loop Behavior 
+Each update() cycle performs:
+
+1. Measurements
+   - Slave Device:
+     - need to complete...
+   - Fuel gauge:
+     - Voltage
+     - Current
+     - Temperature
+     - State of Charge (SOC)
+     - Flags
+   - High Voltage Monitor:
+     -	Die temperature
+     -	Fault flags
+     -  Pack Voltage
+   - Thermistors:
+     - Individual readings + average
+
+2. Protection Logic
+   -	Fault detection via BQ34 flags
+   -	Warning/fault classification
+
+3. State Machine
+   -	INIT → NORMAL
+   -	NORMAL → steady operation
+   -	WARNING → LED indication
+   -	FAULT → system halt behavior
+   -	SHUTDOWN → safe stop
+
+# Key Engineering Notes
+
+## Debug Mode
+Enabled via: 
+``` 
+#define BMS_DEBUG
+#define MESSAGE_DEBUG
+```
+_Heavy UART logging significantly slows execution and should only be used while debugging_
+
+## First Bring-Up Checklist
+
+_If the system is not functioning:_
+
+Fuel Gauge (I2C)
+- Confirm valid register reads
+
+EEPROM
+- Ensure write/read test passes
+
+BQ79600 (SPI)
+- Verify wake sequence timing
+- Confirm DEV_CONF1 == 0x14
+
+SPI
+- Mode = MODE0
+- Proper chip select handling
+
+General
+- Verify stable voltage rails
