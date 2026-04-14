@@ -41,7 +41,7 @@ BQ79616::BQ79616(BQ79600& bridge, uint8_t stack_address)
 
 /* ---- Device commands ---- */
 
-bool BQ79616::readDeviceID(uint16_t& id) {
+bool BQ79616::readDeviceID(uint16_t& id) const {
     uint8_t hi = 0, lo = 0;
 
     // Assuming PARTID spans two bytes
@@ -52,7 +52,7 @@ bool BQ79616::readDeviceID(uint16_t& id) {
     return true;
 }
 
-bool BQ79616::readRevision(uint8_t &rev) {
+bool BQ79616::readRevision(uint8_t &rev) const {
     uint8_t rx = 0;
 
     if (!bridge_.singleRead(stack_address_, REVID, rx)) return false;
@@ -61,7 +61,7 @@ bool BQ79616::readRevision(uint8_t &rev) {
     return true;
 }
 
-bool BQ79616::getCellVoltages_mV(uint16_t* voltages, uint8_t num_cells) {
+bool BQ79616::getCellVoltages_mV(uint16_t* voltages, uint8_t num_cells) const {
 
     // Fallback implementation: Read bytes sequentially since block read isn't available
     for (uint8_t i = 0; i < num_cells; i++) {
@@ -85,7 +85,7 @@ bool BQ79616::getThermistors_cC(uint16_t* temps, uint8_t num_thermistors) {
     return true;
 }
 
-bool BQ79616::getDieTemperature_cC(uint16_t& t) {
+bool BQ79616::getDieTemperature_cC(uint16_t& t) const {
     uint8_t hi = 0, lo = 0;
 
     if (!bridge_.singleRead(stack_address_, DIE1_TEMP_HI, hi)) return false;
@@ -95,7 +95,7 @@ bool BQ79616::getDieTemperature_cC(uint16_t& t) {
     return true;
 }
 
-bool BQ79616::getFaultFlags(uint16_t& flags) {
+bool BQ79616::getFaultFlags(uint16_t& flags) const {
     uint8_t hi = 0, lo = 0;
 
     if (!bridge_.singleRead(stack_address_, FAULT_SUMMARY, hi)) return false;
@@ -107,19 +107,16 @@ bool BQ79616::getFaultFlags(uint16_t& flags) {
 
 /* ---- Balancing Commands ---- */
 
-bool BQ79616::setBalancingMask(uint16_t cell_mask) {
+void BQ79616::setBalancingMask(uint16_t cell_mask) const {
     uint8_t hi = static_cast<uint8_t>(cell_mask >> 8);
     uint8_t lo = static_cast<uint8_t>(cell_mask & 0xFF);
 
-    // Assuming your bridge has a singleWrite function
-    // if (!bridge_.singleWrite(stack_address_, CB_CELL_CTRL, hi)) return false;
-    // if (!bridge_.singleWrite(stack_address_, CB_CELL_CTRL + 1, lo)) return false;
-
-    return true;
+    bridge_.singleWrite(stack_address_, CB_CELL_CTRL, hi);
+    bridge_.singleWrite(stack_address_, CB_CELL_CTRL + 1, lo);
 }
 
-bool BQ79616::stopBalancing() {
-    return setBalancingMask(0x0000);
+void BQ79616::stopBalancing() const {
+    setBalancingMask(0x0000);
 }
 
 } // namespace core::dev

@@ -88,8 +88,8 @@ bool BQ34::getTemperature(uint16_t& t) {
  *
  * @note Internally casts to uint16_t for raw read, then interpreted as signed
  */
-bool BQ34::getCurrent(int16_t& mA) {
-    return readWord(CURRENT, reinterpret_cast<uint16_t&>(mA));
+bool BQ34::getCurrent(uint16_t& mA) {
+    return readWord(CURRENT, mA);
 }
 
 /**

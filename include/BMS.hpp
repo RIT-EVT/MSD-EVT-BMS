@@ -32,6 +32,7 @@
 #include "dev/BQ34.hpp"
 #include "dev/BQ79600.hpp"
 #include "dev/BQ79631.hpp"
+#include "dev/BQ79616.hpp"
 #include <cmath>
 #include <core/dev/LED.hpp>
 

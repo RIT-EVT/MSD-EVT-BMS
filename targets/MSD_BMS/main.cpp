@@ -21,39 +21,20 @@ int main() {
     // safety delay
     core::time::wait(5000);
     bms.init();
-    bms.update();
-    //
-    // while (true) {
-    //     RELAY_CTRL_PIN.writePin(core::io::GPIO::State::LOW); // enable relay
-    //     core::time::wait(10000);
-    //
-    //     RELAY_CTRL_PIN.writePin(core::io::GPIO::State::HIGH); // disable relay
-    //     core::time::wait(10000);
-    // }
 
-    // main loop
-    // while (true) {
-    //     bms.update();
-    //     core::time::wait(SLOW_UPDATE_MS); // wait 10 seconds for now
-    // }
-    // load configuration data
-    // thresholds, timing, cell count, calibration
+    // if init fails, run again after N seconds
+    if (!bms.is_initialized()) {
 
-    // check devices (handshake)
-
-    // Slave BQ79616
-
-    // Data Management control loop
-    // create function
-
-    // Protection and Command Logic state
-    // create function
-
-    // Data logging & Fault Recovery state
-    // create function
-
-    // Error state
-    // create function
-
-    // Warning state
+    }
+    // bms update at normal update time
+    // should be changed to watchdog or reliable timer in the future
+    else {
+        static uint32_t last = 0;
+        while (true) {
+            if (HAL_GetTick() - last > 10) {
+                last = HAL_GetTick();
+                bms.update();
+            }
+        }
+    }
 }

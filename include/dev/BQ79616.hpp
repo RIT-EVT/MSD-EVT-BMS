@@ -24,20 +24,20 @@ public:
     BQ79616(BQ79600& bridge, uint8_t stack_address);
 
     // Device Info
-    bool readDeviceID(uint16_t& id);
-    bool readRevision(uint8_t& rev);
+    bool readDeviceID(uint16_t& id) const;
+    bool readRevision(uint8_t& rev) const;
 
     // Core Measurements
-    bool getCellVoltages_mV(uint16_t* voltages, uint8_t num_cells = 16);
-    bool getThermistors_cC(uint16_t* temps, uint8_t num_thermistors);
+    bool getCellVoltages_mV(uint16_t* voltages, uint8_t num_cells = 16) const;
+    static bool getThermistors_cC(uint16_t* temps, uint8_t num_thermistors);
 
     // Safety & Diagnostics
-    bool getDieTemperature_cC(uint16_t& t);
-    bool getFaultFlags(uint16_t& flags);
+    bool getDieTemperature_cC(uint16_t& t) const;
+    bool getFaultFlags(uint16_t& flags) const;
 
     // Balancing
-    bool setBalancingMask(uint16_t cell_mask);
-    bool stopBalancing();
+    void setBalancingMask(uint16_t cell_mask) const;
+    void stopBalancing() const;
 
 private:
     BQ79600& bridge_;       // The communication bridge

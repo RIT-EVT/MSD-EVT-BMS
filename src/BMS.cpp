@@ -18,6 +18,7 @@
 #include "BMS.hpp"
 
 #include "core/utils/log.hpp"
+#include "dev/BMS_meas.hpp"
 #include "dev/BQ79616.hpp"
 #define BMS_DEBUG
 
@@ -82,6 +83,23 @@ core::io::GPIO& mosi_gpio   = core::io::getGPIO<core::io::Pin::PC_12>();
 }
 
 /* =========================
+ * CAN IDs
+ * ========================= */
+namespace {
+constexpr uint32_t CAN_ID_WARNING       = 0x2;
+constexpr uint32_t CAN_ID_BQ34_BASIC    = 0x100;
+constexpr uint32_t CAN_ID_BQ34_STATUS   = 0x101;
+constexpr uint32_t CAN_ID_HVM_BASIC     = 0x110;
+constexpr uint32_t CAN_ID_THERM         = 0x120;
+constexpr uint32_t CAN_ID_STATE         = 0x130;
+constexpr uint32_t CAN_ID_SLAVE_CELLS_1 = 0x140;
+constexpr uint32_t CAN_ID_SLAVE_CELLS_2 = 0x141;
+constexpr uint32_t CAN_ID_SLAVE_STATUS  = 0x142;
+constexpr uint32_t CAN_ID_ERROR         = 0x1FF;
+
+}
+
+/* =========================
  * Internal State Flags
  * ========================= */
 static bool bq79600_present = false;
@@ -90,7 +108,11 @@ static bool slave1_present  = false;
 static bool slave2_present  = false;
 static bool init_success    = false;
 
-constexpr uint8_t STACK_DEVICES = 3; // bridge counts as a stack device
+constexpr uint8_t STACK_DEVICES = 2; // bridge counts as a stack device
+uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xBE, 0xEF, 0x00, 0x01, 0x02};
+IO::CANMessage transmit_message(1, 8, &payload[0], true);
+IO::CANMessage received_message;
+
 
 /* =========================
  * Singleton Accessor
@@ -120,6 +142,11 @@ void msd::bms::BmsMaster::delay_us(uint32_t us) const {
     }
 }
 
+/* =========================
+ * CAN Helper functions
+ * should be moved to a different file
+ * ========================= */
+
 /**
  * @brief Control CAN transceiver standby mode
  *
@@ -133,6 +160,65 @@ void toggle_can(const bool standby) {
         can_gpio.writePin(IO::GPIO::State::LOW);
     }
 }
+
+/**
+ * @brief Control CAN transceiver standby mode
+ *
+ * @param id CAN ID
+ * @param data data to send via can
+ * @param len length of message
+ */
+inline void send_can(uint32_t id, uint8_t* data, uint8_t len) {
+    if (!can) return;
+
+    IO::CANMessage msg(id, len, data, true); // standard ID
+    toggle_can(false);
+    core::time::wait(2);
+    can->transmit(msg);
+    toggle_can(true);
+    core::time::wait(2);
+}
+
+/**
+ * @brief Control CAN transceiver standby mode
+ *
+ * @param code specific error code
+ * @param detail fault flags for error
+ */
+void send_error(uint8_t code, uint16_t detail) {
+    uint8_t data[4];
+
+    data[0] = code;
+    data[1] = 0;
+    data[2] = (detail >> 8) & 0xFF;
+    data[3] = detail & 0xFF;
+
+    send_can(CAN_ID_ERROR, data, 4);
+}
+
+/**
+ *
+ * @brief CAN IRQ
+ *
+ * @param message address to store received message
+ * @param priv uart instance
+ *
+ * @note only used for testing
+ */
+void canIRQHandler(IO::CANMessage& message, void* priv) {
+    uart = static_cast<IO::UART*>(priv);
+    uart->printf("Message received\r\n");
+    uart->printf("Message id: 0x%X \r\n", message.getId());
+    uart->printf("Message length: %d\r\n", message.getDataLength());
+    uart->printf("Message contents: ");
+
+    uint8_t* message_payload = message.getPayload();
+    for (int i = 0; i < message.getDataLength(); i++) {
+        uart->printf("0x%02X ", message_payload[i]);
+    }
+    uart->printf("\r\n\r\n");
+}
+
 
 /**
  * @brief Perform GPIO-based wake sequence for BQ79600
@@ -209,7 +295,7 @@ void msd::bms::BmsMaster::init() {
     sel1_gpio.writePin(core::io::GPIO::State::LOW);
     latch_gpio.writePin(core::io::GPIO::State::LOW);
     hv_cs_gpio.writePin(core::io::GPIO::State::HIGH);
-    can_gpio.writePin(IO::GPIO::State::HIGH);
+    can_gpio.writePin(IO::GPIO::State::LOW);
     sw_en_shared_gpio.writePin(IO::GPIO::State::HIGH);
     fault_gpio.writePin(IO::GPIO::State::HIGH);
     mosi_gpio.writePin(IO::GPIO::State::HIGH);
@@ -218,24 +304,40 @@ void msd::bms::BmsMaster::init() {
 
     // Initialize communication peripherals
     i2c = &IO::getI2C<IO::Pin::I2C_SCL, IO::Pin::I2C_SDA>();
+
     can = &IO::getCAN<IO::Pin::PB_6, IO::Pin::PB_5>();
+
+    can->addIRQHandler(canIRQHandler, &uart);
+
+    // join CAN network
+    IO::CAN::CANStatus result = can->connect();
+
     spi = &IO::getSPI<IO::Pin::PC_10, IO::Pin::PC_12, IO::Pin::PC_11>(spi_cs_pins, 1);
 
     spi->configureSPI(SPI_SPEED_1MHZ, IO::SPI::SPIMode::SPI_MODE0, SPI_MSB_FIRST);
 
     #ifdef BMS_DEBUG
-        uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600);
-        core::log::LOGGER.setUART(uart);
-        core::log::LOGGER.setLogLevel(core::log::Logger::LogLevel::DEBUG);
+    uart = &IO::getUART<IO::Pin::UART_TX, IO::Pin::UART_RX>(9600);
+    core::log::LOGGER.setUART(uart);
+    core::log::LOGGER.setLogLevel(core::log::Logger::LogLevel::DEBUG);
 
-        if (!uart->isWritable()) {
-            uart_safe_mode = false;
-        }
+    if (!uart->isWritable()) {
+        uart_safe_mode = false;
+    }
 
-        uart->puts("              BMS init start           \r\n");
-        uart->puts("---------------------------------------\r\n\r\n");
-        uart->puts("Starting initializations!\r\n\r\n");
+    uart->puts("              BMS init start           \r\n");
+    uart->puts("---------------------------------------\r\n\r\n");
+    uart->puts("Starting initializations!\r\n\r\n");
     #endif
+
+
+    if (result != IO::CAN::CANStatus::OK) {
+        #ifdef BMS_DEBUG
+        uart->printf("Failed to connect to the CAN network\r\n");
+        #endif
+        state_ = BmsState::FAULT;
+        return;
+    }
 
     /**
      * ON-BOARD DEVICE INITILIZATION
@@ -409,6 +511,12 @@ void msd::bms::BmsMaster::init() {
     // start auto-addressing
     bridge->autoAddressStack(STACK_DEVICES);
 
+    // test loop
+    // while (true) {
+    // bridge->singleWrite(0x00, 0x309, 0x21);
+    //     core::time::wait(500);
+    // }
+
     // create instances of devices
     static DEV::BQ79631 hv_monitor_inst{(*bridge), 1};
     hv_monitor = &hv_monitor_inst;
@@ -457,7 +565,7 @@ void msd::bms::BmsMaster::init() {
                 uart->puts("ERROR: Register Init failed\r\n");
             }
             #endif
-            // state_ = BmsState::FAULT;
+            state_ = BmsState::FAULT;
         }
     }
 
@@ -513,129 +621,219 @@ void msd::bms::BmsMaster::update() {
  * - Thermistor array
  *
  * Updates internal state variables and triggers FAULT state on failure.
+ *
+ * @note this function should be separated into a separate file
+ *        there should be a function for reading data from each device
+ *        with debug output and CAN output included
  */
 void msd::bms::BmsMaster::update_measurements() {
     // main slave updates first
     // will implement after daisy chain fixed
 
-    // measurement updates bq34
-    bool v = fuel_gauge->getVoltage(bq34_voltage_);
-    bool t = fuel_gauge->getTemperature(bq34_temperature_);
-    bool c = fuel_gauge->getCurrent(bq34_current_);
-    bool s = fuel_gauge->getSOC(bq34_soc_);
-    bool e = fuel_gauge->getMaxError(bq34_max_error_);
-    bool r = fuel_gauge->getVoltageRaw(bq34_voltage_raw_);
-    bool f = fuel_gauge->getFlags(bq34_flags_);
-    if (!(v && t && c && s && e && r && f)) {
-        #ifdef BMS_DEBUG
-            if (uart_safe_mode) {
-                uart->puts("BQ34 read error:\r\n");
-                if (!v) uart->printf("\tvoltage read error");
-                if (!t) uart->printf("\ttemperature read error");
-                if (!c) uart->printf("\tcurrent read error");
-                if (!s) uart->printf("\tsoc read error");
-                if (!e) uart->printf("\tmax error read error");
-                if (!r) uart->printf("\traw voltage read error");
-                if (!f) uart->printf("\terror flags read error");
-            }
-        #endif
-        state_ = BmsState::FAULT;
-      } else {
-          #ifdef BMS_DEBUG
-                if (uart_safe_mode) {
-                    uart->puts("           BQ34 MEASUREMENTS           \r\n");
-                    uart->puts("---------------------------------------\r\n\r\n\r\n");
 
-                    // debug print statements
-                    const uint16_t temp_c = bq34_temperature_/10 - 273;
-                    uart->printf("Voltage: %d mV\r\n", bq34_voltage_);
-                    uart->printf("Temperature: %d C\r\n", temp_c);
-                    uart->printf("Current: %d mA\r\n", bq34_current_);
-                    uart->printf("SOC: %d mA\r\n", bq34_soc_);
-                    uart->printf("Max Error: %d \r\n", bq34_max_error_);
-                    uart->printf("Voltage (raw): %d mV\r\n", bq34_voltage_raw_);
+    uint16_t fg[7];
+    uint16_t hvm[4];
+    int16_t therm[3];
 
-                    uart->printf("Flags: 0x%X:\r\n", bq34_flags_);
+    uint16_t slave_cells[16]; // max supported
+    uint16_t slave_aux[2];    // temp + faults
 
-                    // Decode common flag bits
-                    if (bq34_flags_ & 0x0100) uart->printf("\t- CHG (Charging Allowed)\r\n");
-                    if (bq34_flags_ & 0x0200) uart->printf("\t- FC (Fully Charged)\r\n");
-                    if (bq34_flags_ & 0x0400) uart->printf("\t- XCHG (Charging not allowed)\r\n");
-                    if (bq34_flags_ & 0x0800) uart->printf("\t- CHG_INH (Unable to charge)\r\n");
-                    if (bq34_flags_ & 0x1000) uart->printf("\t- BATLOW (Low Battery Voltage)\r\n");
-                    if (bq34_flags_ & 0x2000) uart->printf("\t- BATHI (High Battery Voltage)\r\n");
-                    if (bq34_flags_ & 0x4000) uart->printf("\t- OTD (Over Temperature Discharge)\r\n");
-                    if (bq34_flags_ & 0x8000) uart->printf("\t- OTC (Over Temperature Charge)\r\n");
+    bool slave_ok = false;
 
-                    if (bq34_flags_ & 0x0001) uart->printf("\t- DSG (Discharging detected)\r\n");
-                    if (bq34_flags_ & 0x0004) uart->printf("\t- SOC1 (SOC First Threshold)\r\n");
-                    if (bq34_flags_ & 0x0002) uart->printf("\t- SOCF (SOC Final Threshold)\r\n");
-                    if (bq34_flags_ & 0x0010) uart->printf("\t- CF (Update Cycle Needed)\r\n");
-                    if (bq34_flags_ & 0x0080) uart->printf("\t- REST (OCV reading taken)\r\n");
-                }
-          #endif
-          // state_ = BmsState::NORMAL;
-      }
+    if (slave) {
+        bool v_ok = slave->getCellVoltages_mV(slave_cells, 6); // start with 6 cells
+        bool t_ok = slave->getDieTemperature_cC(slave_aux[0]);
+        bool f_ok = slave->getFaultFlags(slave_aux[1]);
 
+        slave_ok = v_ok && t_ok && f_ok;
 
-    // HVM Readings
-    if (bq79631_present) {
-        if (!(hv_monitor->getPackVoltage_mV(pack_voltage_mV_) &&
-          hv_monitor->getDieTemperature_cC(die_temp_cC_) &&
-          hv_monitor->getFaultFlags(fault_flags_) &&
-          hv_monitor->getCellCount(cell_count_))) {
-            #ifdef BMS_DEBUG
-                if (uart_safe_mode) {
-                    uart->puts("BQ79631 read error (one or more values invalid)\r\n");
-                }
-            #endif
-            state_ = BmsState::FAULT;
-          }else {
-              #ifdef BMS_DEBUG
-                    if (uart_safe_mode) {
-                        uart->puts("         BQ79631 MEASUREMENTS         \r\n");
-                        uart->puts("---------------------------------------\r\n\r\n\r\n");
-
-                        uart->printf("Pack Voltage: %d mV\r\n", pack_voltage_mV_);
-                        uart->printf("Cell count: %d \r\n", cell_count_);
-                        uart->printf("Die Temperature: %d C\r\n", die_temp_cC_);
-
-                        uart->printf("\tFlags: 0x%X:\r\n", fault_flags_);
-                    }
-              #endif
-              state_ = BmsState::NORMAL;
-          }
+        if (!slave_ok) {
+            state_ = BmsState::WARNING;
+            send_error(0x04, 0);
+        }
     }
-    // thermistors
-    #ifdef BMS_DEBUG
-        if (uart_safe_mode) {
-            uart->puts("\r\n      THERMISTOR MEASUREMENTS      \r\n");
-            uart->puts("---------------------------------------\r\n\r\n\r\n");
-        }
-    #endif
 
-    thermistors_->update();
+    bool fg_ok   = get_FuelGauge_measurements(fg, fuel_gauge);
+    bool hvm_ok  = get_HVM_measurements(hvm, hv_monitor);
+    bool th_ok   = get_Thermistors_measurements(therm, thermistors_);
 
-            #ifdef BMS_DEBUG
-                for (uint8_t i = 0; i < 2; i++) {
-                    auto [adc_raw, temperature_dC, fault] = thermistors_->getSensor(i);
-                        if (uart_safe_mode) {
-                            uart->printf("Raw ADC Value: %d   TH-%d: %d.%d C   Fault=%d\r\n",
-                                         adc_raw,
-                                         i,
-                                         temperature_dC,
-                                         abs(temperature_dC % 10),
-                                         static_cast<uint8_t>(fault));
-                        }
-                }
-            #endif
+    if (!fg_ok) {
+        state_ = BmsState::FAULT;
+        send_error(0x01, 0);
+        return;
+    }
 
-    #ifdef BMS_DEBUG
-        int16_t avg = thermistors_->getAverage();
-        if (uart_safe_mode) {
-            uart->printf("Avg Temp: %d.%d C\r\n", avg, abs(avg % 10));
-        }
-    #endif
+    if (!hvm_ok) {
+        state_ = BmsState::FAULT;
+        send_error(0x02, 0);
+        return;
+    }
+
+    if (!th_ok) {
+        state_ = BmsState::WARNING;
+        send_error(0x03, 0);
+        return;
+    }
+
+    // Assign to class variables (clean separation)
+    bq34_voltage_      = fg[0];
+    bq34_temperature_  = fg[1];
+    bq34_current_      = fg[2];
+    bq34_soc_          = fg[3];
+    bq34_max_error_    = fg[4];
+    bq34_voltage_raw_  = fg[5];
+    bq34_flags_        = fg[6];
+
+    pack_voltage_mV_   = hvm[0];
+    die_temp_cC_       = hvm[1];
+    fault_flags_       = hvm[2];
+    cell_count_        = hvm[3];
+
+
+
+    state_ = BmsState::NORMAL;
+
+    // Slave CAN message //
+
+    //-----------------//
+
+    // frame 1 cell count 1-4
+    uint8_t slave_data1[8];
+
+    // Cell 1–4
+    for (int i = 0; i < 4; i++) {
+        slave_data1[i*2]     = (slave_cells[i] >> 8) & 0xFF;
+        slave_data1[i*2 + 1] = slave_cells[i] & 0xFF;
+    }
+
+    send_can(CAN_ID_SLAVE_CELLS_1, slave_data1, 8); // should be moved to BMS_can file soon
+    core::time::wait(100); // should remove & use global throttle
+
+    uint8_t slave_data2[8];
+
+    // frame 2 cell count 5-6
+
+    // Cell 5–6 (rest padded)
+    for (int i = 0; i < 2; i++) {
+        slave_data2[i*2]     = (slave_cells[i+4] >> 8) & 0xFF;
+        slave_data2[i*2 + 1] = slave_cells[i+4] & 0xFF;
+    }
+
+    // pad remaining bytes
+    for (int i = 4; i < 8; i++) {
+        slave_data2[i] = 0;
+    }
+
+    send_can(CAN_ID_SLAVE_CELLS_2, slave_data2, 8);
+    core::time::wait(100);
+
+    // frame 3 temp & faults
+    uint8_t slave_status[8];
+
+    // die temp
+    slave_status[0] = (slave_aux[0] >> 8) & 0xFF;
+    slave_status[1] = slave_aux[0] & 0xFF;
+
+    // fault flags
+    slave_status[2] = (slave_aux[1] >> 8) & 0xFF;
+    slave_status[3] = slave_aux[1] & 0xFF;
+
+    // padding
+    for (int i = 4; i < 8; i++) {
+        slave_status[i] = 0;
+    }
+
+    send_can(CAN_ID_SLAVE_STATUS, slave_status, 8);
+    core::time::wait(100);
+
+    //-----------------//
+
+
+    // BQ34 CAN message //
+
+    //-----------------//
+    uint8_t bq34_data[8];
+
+    // voltage
+    bq34_data[0] = (bq34_voltage_ >> 8) & 0xFF;
+    bq34_data[1] = bq34_voltage_ & 0xFF;
+
+    // current
+    bq34_data[2] = (bq34_current_ >> 8) & 0xFF;
+    bq34_data[3] = bq34_current_ & 0xFF;
+
+    bq34_data[4] = fg[3] & 0xFF;   // SOC
+
+    int16_t temp_c = fg[1]/10 - 273;
+    bq34_data[5] = temp_c & 0xFF;
+
+    bq34_data[6] = 0;
+    bq34_data[7] = 0;
+
+    send_can(CAN_ID_BQ34_BASIC, bq34_data, 8);
+
+    core::time::wait(100);
+
+    // BQ34 Flag data
+    uint8_t bq34_flag_data[4];
+
+    bq34_flag_data[0] = (bq34_flags_ >> 8) & 0xFF;  // flags
+    bq34_flag_data[1] = bq34_flags_ & 0xFF;
+    bq34_flag_data[2] = fg[4];          // max error
+    bq34_flag_data[3] = 0;
+
+    send_can(CAN_ID_BQ34_BASIC, bq34_flag_data, 4);
+    core::time::wait(100);
+
+    //-----------------//
+
+    // HVM CAN message //
+
+    //-----------------//
+    uint8_t hvm_data[8];
+
+    // pack voltage -> 2 bytes
+    hvm_data[0] = (pack_voltage_mV_ >> 8) & 0xFF;
+    hvm_data[1] = pack_voltage_mV_ & 0xFF;
+
+    // die temp -> 2 bytes
+    hvm_data[2] = (die_temp_cC_ >> 8) & 0xFF;
+    hvm_data[3] = die_temp_cC_ & 0xFF;
+
+    // fault flags -> 2 bytes
+    hvm_data[0] = (fault_flags_ >> 8) & 0xFF;
+    hvm_data[1] = fault_flags_ & 0xFF;
+
+    // cell count -> 2 bytes
+    hvm_data[2] = (cell_count_ >> 8) & 0xFF;
+    hvm_data[3] = cell_count_ & 0xFF;
+
+    send_can(CAN_ID_HVM_BASIC, hvm_data, 8);
+    core::time::wait(100);
+
+
+    //-----------------//
+
+    // Thermistor CAN message //
+
+    //-----------------//
+
+    uint8_t thermistor_data[8];
+
+    thermistor_data[0] = therm[0] / 10; // T1
+    thermistor_data[1] = therm[1] / 10; // T2
+    thermistor_data[2] = therm[2] / 10; // avg
+
+    thermistor_data[3] = 0;
+    thermistor_data[4] = 0;
+    thermistor_data[5] = 0;
+    thermistor_data[6] = 0;
+    thermistor_data[7] = 0;
+
+    send_can(CAN_ID_THERM, thermistor_data, 8);
+    core::time::wait(100);
+
+    //-----------------//
 
 }
 
@@ -662,6 +860,7 @@ void msd::bms::BmsMaster::update_protection() {
             }
         #endif
         state_ = BmsState::FAULT;
+        send_error(CAN_ID_ERROR, fault_flags_);
         return;
     }
 
@@ -672,6 +871,7 @@ void msd::bms::BmsMaster::update_protection() {
             }
         #endif
         state_ = BmsState::WARNING;
+        send_error(CAN_ID_WARNING, bq34_flags_);
         return;
     }
 
@@ -712,6 +912,13 @@ void msd::bms::BmsMaster::update_state_machine() {
             shutdown();
             break;
     }
+
+    uint8_t data[2];
+
+    data[0] = static_cast<uint8_t>(state_);
+    data[1] = 0;
+
+    send_can(CAN_ID_STATE, data, 2);
 }
 
 

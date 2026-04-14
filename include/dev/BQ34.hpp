@@ -70,7 +70,7 @@ public:
 
     bool getVoltage(uint16_t& mv);
     bool getTemperature(uint16_t& t);
-    bool getCurrent(int16_t& mA);
+    bool getCurrent(uint16_t& mA);
     bool getSOC(uint16_t& soc);
     bool getMaxError(uint16_t& soh);
     bool getFlags(uint16_t& flags);

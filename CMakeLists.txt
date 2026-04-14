@@ -74,6 +74,8 @@ add_library(${PROJECT_NAME} STATIC
         include/dev/BMS_model_balancing.h
         include/dev/BQ79616.hpp
         src/dev/BQ79616.cpp
+        src/dev/BMS_meas.cpp
+        include/dev/BMS_meas.hpp
 )
 
 # Add sources

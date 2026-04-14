@@ -16,8 +16,8 @@
 
 #include "dev/BQ79600.hpp"
 
-// #define BMS_DEBUG // MUST BE DEFINED IN BMS.CPP
-// #define MESSAGE_DEBUG
+#define BMS_DEBUG // MUST BE DEFINED IN BMS.CPP
+#define MESSAGE_DEBUG
 
 /* =========================
  * Register Map (Partial)
