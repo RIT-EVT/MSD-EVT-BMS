@@ -31,7 +31,7 @@ int main() {
     else {
         static uint32_t last = 0;
         while (true) {
-            if (HAL_GetTick() - last > 10) {
+            if (HAL_GetTick() - last > 3000) {
                 last = HAL_GetTick();
                 bms.update();
             }

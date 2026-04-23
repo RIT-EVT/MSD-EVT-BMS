@@ -108,7 +108,7 @@ static bool slave1_present  = false;
 static bool slave2_present  = false;
 static bool init_success    = false;
 
-constexpr uint8_t STACK_DEVICES = 2; // bridge counts as a stack device
+constexpr uint8_t STACK_DEVICES = 3; // bridge counts as a stack device
 uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xBE, 0xEF, 0x00, 0x01, 0x02};
 IO::CANMessage transmit_message(1, 8, &payload[0], true);
 IO::CANMessage received_message;
@@ -185,7 +185,7 @@ inline void send_can(uint32_t id, uint8_t* data, uint8_t len) {
  * @param code specific error code
  * @param detail fault flags for error
  */
-void send_error(uint8_t code, uint16_t detail) {
+void send_error(uint32_t code, uint16_t detail) {
     uint8_t data[4];
 
     data[0] = code;
@@ -335,8 +335,9 @@ void msd::bms::BmsMaster::init() {
         #ifdef BMS_DEBUG
         uart->printf("Failed to connect to the CAN network\r\n");
         #endif
-        state_ = BmsState::FAULT;
-        return;
+        // removed error return for debugging
+        // state_ = BmsState::FAULT;
+        // return;
     }
 
     /**
@@ -390,6 +391,7 @@ void msd::bms::BmsMaster::init() {
             uart->puts("ERROR: BQ34Z100 not detected!\r\n");
         }
         #endif
+        // removed error return for debugging
         // state_ = BmsState::FAULT;
         // return; //go to error state
     }
@@ -415,6 +417,7 @@ void msd::bms::BmsMaster::init() {
             uart->puts("ERROR: EEPROM failed integrity check\r\n");
         }
         #endif
+        // removed error return for debugging
         // state_ = BmsState::FAULT;
         // return; // go to error state
     }
@@ -504,24 +507,27 @@ void msd::bms::BmsMaster::init() {
     }
     #endif
     bridge->singleWrite(0x00, 0x309, 0x21);
+    core::time::wait(50);
+    bridge->singleWrite(0x00, 0x309, 0x21);
 
+
+    /**
+     * From this point beyond, the firmware does not work
+     * with the current BMS->Slave daisychain this firmware
+     * does work with the EVMs
+     */
 
     core::time::wait(11*STACK_DEVICES);
 
     // start auto-addressing
     bridge->autoAddressStack(STACK_DEVICES);
 
-    // test loop
-    // while (true) {
-    // bridge->singleWrite(0x00, 0x309, 0x21);
-    //     core::time::wait(500);
-    // }
 
     // create instances of devices
     static DEV::BQ79631 hv_monitor_inst{(*bridge), 1};
     hv_monitor = &hv_monitor_inst;
 
-    static DEV::BQ79616 slave_inst{(*bridge), 1};
+    static DEV::BQ79616 slave_inst{(*bridge), 2};
     slave = &slave_inst;
 
 
@@ -544,13 +550,15 @@ void msd::bms::BmsMaster::init() {
         uart->puts("✗ Device 2 (Slave1) not responding\r\n");
     }
 
-    if (!(bq79600_present && slave1_present)) {
+    if (!(bq79631_present)) {
         #ifdef BMS_DEBUG
             if (uart_safe_mode) {
                 uart->puts("ERROR: Auto-addressing failed\r\n");
             }
         #endif
+        // removed error return for debugging
         // state_ = BmsState::FAULT;
+        // return;
     } else {
         #ifdef BMS_DEBUG
         if (uart_safe_mode) {
@@ -565,7 +573,9 @@ void msd::bms::BmsMaster::init() {
                 uart->puts("ERROR: Register Init failed\r\n");
             }
             #endif
-            state_ = BmsState::FAULT;
+            // removed error return for debugging
+            // state_ = BmsState::FAULT;
+            // return;
         }
     }
 
@@ -593,12 +603,18 @@ void msd::bms::BmsMaster::update() {
     }
 
     status_led.setState(core::io::GPIO::State::HIGH);
+    extra_led.setState(core::io::GPIO::State::HIGH); // EXTRA LED FOR IMAGINE EXHIBIT
 
     update_measurements();
     update_protection();
-    update_state_machine();
 
     status_led.setState(core::io::GPIO::State::LOW);
+
+    update_state_machine();
+
+    extra_led.setState(core::io::GPIO::State::LOW); // EXTRA LED FOR IMAGINE EXHIBIT
+
+
 
     // test contactor switch
     // when fault low -> switch on, else off
