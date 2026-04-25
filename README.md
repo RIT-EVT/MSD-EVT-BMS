@@ -7,7 +7,16 @@ This project implements a high-level BMS master controller responsible for:
 - Enforcing safety protections
 - Coordinating system-level behavior
 
-Built on top of the EVT-core library for embedded hardware abstraction.
+Built on top of the EVT-core library for embedded hardware abstraction. 
+
+In order for this firmware to work with the EVT-core library the following lines must be 
+changed in manager.hpp
+
+```c++
+void init() -> inline void init()
+
+RTC& getRTC() -> inline RTC& getRTC()
+```
 
 ---
 
